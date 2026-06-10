@@ -57,6 +57,9 @@ dependencies:
     dio: ^5.9.0
     app_links: ^7.0.0
     native_device_orientation: ^2.1.0
+    cast: ^2.1.0
+    # cast 2.1.0 is written against the bonsoir 5.x API; 6+/7+ break it.
+    bonsoir: ^5.1.0
 
 dev_dependencies:
     flutter_test:

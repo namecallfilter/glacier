@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:frosty/apis/twitch_api.dart';
 import 'package:frosty/models/channel.dart';
 import 'package:frosty/models/stream.dart';
+import 'package:frosty/screens/channel/video/cast_store.dart';
 import 'package:frosty/screens/settings/stores/auth_store.dart';
 import 'package:frosty/screens/settings/stores/settings_store.dart';
 import 'package:frosty/services/stream_proxy_bridge.dart';
@@ -56,6 +57,17 @@ abstract class VideoStoreBase with Store {
   final StreamProxyBridge _streamProxyBridge = StreamProxyBridge();
 
   var _streamProxyAttached = false;
+
+  /// Handles Google Cast discovery, sessions, and the local HLS relay.
+  late final CastStore castStore = CastStore(
+    twitchApi: twitchApi,
+    userLogin: userLogin,
+    displayName: userLogin,
+    settingsStore: settingsStore,
+  );
+
+  /// Disposes the cast state reaction.
+  ReactionDisposer? _disposeCastReaction;
 
   /// The webview controller used for injecting JavaScript to control the webview and video player.
   late final WebViewController videoWebViewController =
@@ -296,8 +308,20 @@ abstract class VideoStoreBase with Store {
           settingsStore.streamProxyUrls.join('\n'),
           settingsStore.streamProxyWhitelistedChannels.join('\n'),
         ),
-        (_) => unawaited(_syncStreamProxyBridge(refresh: true)),
+        (_) {
+          unawaited(_syncStreamProxyBridge(refresh: true));
+          unawaited(castStore.updateStreamProxyConfig());
+        },
       );
+
+      // Pause local playback when casting starts to avoid double streams.
+      _disposeCastReaction = reaction((_) => castStore.connectionState, (
+        state,
+      ) {
+        if (state == CastConnectionState.connected && !_paused) {
+          handlePausePlay();
+        }
+      });
     }
 
     updateStreamInfo();
@@ -1149,6 +1173,9 @@ abstract class VideoStoreBase with Store {
     _disposeAndroidAutoPipReaction?.call();
     _disposeLatencySettingsReaction?.call();
     _disposeStreamProxyReaction?.call();
+    _disposeCastReaction?.call();
+
+    castStore.dispose();
 
     final platformController = videoWebViewController.platform;
     if (_streamProxyAttached &&

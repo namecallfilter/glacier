@@ -65,10 +65,15 @@ class StreamProxyWebViewClient(
         if (request == null) return null
 
         val currentConfig = config
-        val decision = router.route(
+        val proxyRequest = ProxyHttpRequest(
             url = request.url.toString(),
             method = request.method,
             headers = request.requestHeaders ?: emptyMap(),
+        )
+        val decision = router.route(
+            url = proxyRequest.url,
+            method = proxyRequest.method,
+            headers = proxyRequest.headers,
             config = currentConfig,
         )
 
@@ -79,7 +84,7 @@ class StreamProxyWebViewClient(
 
         return try {
             val response = fetcher.fetch(
-                request = request,
+                request = proxyRequest,
                 decision = decision,
                 config = currentConfig,
                 router = router,
@@ -93,7 +98,7 @@ class StreamProxyWebViewClient(
                 )
             }
 
-            response
+            response?.toWebResourceResponse()
         } catch (error: Exception) {
             log(
                 "matched type=${decision.requestType.logName} " +
@@ -159,6 +164,17 @@ class StreamProxyWebViewClient(
         } finally {
             documentStartScript = null
         }
+    }
+
+    private fun ProxyHttpResponse.toWebResourceResponse(): WebResourceResponse {
+        return WebResourceResponse(
+            mimeType,
+            encoding,
+            statusCode,
+            reasonPhrase,
+            headers,
+            body,
+        )
     }
 
     companion object {

@@ -119,9 +119,7 @@ void main() {
     test('throws NotFoundException for unknown user', () {
       dioAdapter.onGet(
         'https://api.twitch.tv/helix/users',
-        (server) => server.reply(200, {
-          'data': <dynamic>[],
-        }),
+        (server) => server.reply(200, {'data': <dynamic>[]}),
         queryParameters: {'login': 'doesnotexist'},
       );
 
@@ -204,9 +202,7 @@ void main() {
         }),
       );
 
-      final result = await api.getStreamsByIds(
-        userIds: ['111', '222'],
-      );
+      final result = await api.getStreamsByIds(userIds: ['111', '222']);
 
       expect(result.data, hasLength(2));
       expect(result.data[0].userName, 'User1');
@@ -339,9 +335,7 @@ void main() {
     test('throws ApiException for nonexistent channel', () {
       dioAdapter.onGet(
         'https://api.twitch.tv/helix/channels',
-        (server) => server.reply(200, {
-          'data': <dynamic>[],
-        }),
+        (server) => server.reply(200, {'data': <dynamic>[]}),
         queryParameters: {'broadcaster_id': '99999'},
       );
 
@@ -387,6 +381,48 @@ void main() {
       expect(emotes[0].type, EmoteType.twitchBits);
       expect(emotes[1].type, EmoteType.twitchFollower);
       expect(emotes[2].type, EmoteType.twitchChannel);
+    });
+  });
+
+  group('getStreamPlaybackUrl', () {
+    test('builds a usher URL from the playback access token', () async {
+      dioAdapter.onPost(
+        'https://gql.twitch.tv/gql',
+        (server) => server.reply(200, {
+          'data': {
+            'streamPlaybackAccessToken': {
+              'value': '{"channel":"somechannel"}',
+              'signature': 'abcdef123456',
+              '__typename': 'PlaybackAccessToken',
+            },
+          },
+        }),
+        data: Matchers.any,
+      );
+
+      final url = await api.getStreamPlaybackUrl(userLogin: 'SomeChannel');
+
+      final uri = Uri.parse(url);
+      expect(uri.host, 'usher.ttvnw.net');
+      expect(uri.path, '/api/channel/hls/somechannel.m3u8');
+      expect(uri.queryParameters['sig'], 'abcdef123456');
+      expect(uri.queryParameters['token'], '{"channel":"somechannel"}');
+      expect(uri.queryParameters['allow_source'], 'true');
+    });
+
+    test('throws when no playback access token is returned', () async {
+      dioAdapter.onPost(
+        'https://gql.twitch.tv/gql',
+        (server) => server.reply(200, {
+          'data': {'streamPlaybackAccessToken': null},
+        }),
+        data: Matchers.any,
+      );
+
+      expect(
+        () => api.getStreamPlaybackUrl(userLogin: 'somechannel'),
+        throwsA(isA<ApiException>()),
+      );
     });
   });
 }

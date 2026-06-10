@@ -1,8 +1,6 @@
 package com.namecallfilter.glacier.streamproxy
 
 import android.util.Base64
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.FilterInputStream
@@ -39,11 +37,11 @@ class StreamProxyFetcher(
     )
 
     fun fetch(
-        request: WebResourceRequest,
+        request: ProxyHttpRequest,
         decision: StreamProxyDecision,
         config: StreamProxyConfig,
         router: StreamProxyRequestRouter,
-    ): WebResourceResponse? {
+    ): ProxyHttpResponse? {
         if (config.proxyUrls.isEmpty()) {
             return if (decision.flagged) {
                 fetchDirect(request, decision, router, "no_proxy_urls")
@@ -52,7 +50,7 @@ class StreamProxyFetcher(
             }
         }
 
-        val requestUrl = request.url.toString()
+        val requestUrl = request.url
         config.proxyUrls.forEachIndexed { index, proxyUrl ->
             val parsedProxy = parseProxyUrl(proxyUrl)
             if (parsedProxy == null) {
@@ -92,7 +90,7 @@ class StreamProxyFetcher(
                     connection.readTimeout = READ_TIMEOUT_MS
                     connection.instanceFollowRedirects = true
                     connection.requestMethod = request.method
-                    copyRequestHeaders(request.requestHeaders ?: emptyMap(), connection)
+                    copyRequestHeaders(request.headers, connection)
                     setProxyAuthorization(parsedProxy, connection)
 
                     val statusCode = connection.responseCode
@@ -124,21 +122,21 @@ class StreamProxyFetcher(
                         )
                         connection.disconnect()
 
-                        return@withCredentials WebResourceResponse(
-                            mimeType,
-                            encoding,
+                        return@withCredentials ProxyHttpResponse(
                             statusCode,
                             reason,
+                            mimeType,
+                            encoding,
                             responseHeaders,
                             ByteArrayInputStream(bytes),
                         )
                     }
 
-                    WebResourceResponse(
-                        mimeType,
-                        encoding,
+                    ProxyHttpResponse(
                         statusCode,
                         reason,
+                        mimeType,
+                        encoding,
                         responseHeaders,
                         responseStream,
                     )
@@ -161,14 +159,14 @@ class StreamProxyFetcher(
         }
     }
 
-    private fun fetchDirect(
-        request: WebResourceRequest,
+    fun fetchDirect(
+        request: ProxyHttpRequest,
         decision: StreamProxyDecision,
         router: StreamProxyRequestRouter,
         reason: String,
-    ): WebResourceResponse? {
+    ): ProxyHttpResponse? {
         var connection: HttpURLConnection? = null
-        val requestUrl = request.url.toString()
+        val requestUrl = request.url
 
         return try {
             log(
@@ -181,7 +179,7 @@ class StreamProxyFetcher(
             connection.readTimeout = READ_TIMEOUT_MS
             connection.instanceFollowRedirects = true
             connection.requestMethod = request.method
-            copyRequestHeaders(request.requestHeaders ?: emptyMap(), connection)
+            copyRequestHeaders(request.headers, connection)
 
             val statusCode = connection.responseCode
             val responseStream = if (request.method.equals("HEAD", ignoreCase = true)) {
@@ -212,20 +210,20 @@ class StreamProxyFetcher(
                 )
                 connection.disconnect()
 
-                WebResourceResponse(
-                    mimeType,
-                    encoding,
+                ProxyHttpResponse(
                     statusCode,
                     reasonPhrase,
+                    mimeType,
+                    encoding,
                     responseHeaders,
                     ByteArrayInputStream(bytes),
                 )
             } else {
-                WebResourceResponse(
-                    mimeType,
-                    encoding,
+                ProxyHttpResponse(
                     statusCode,
                     reasonPhrase,
+                    mimeType,
+                    encoding,
                     responseHeaders,
                     responseStream,
                 )
@@ -242,12 +240,12 @@ class StreamProxyFetcher(
     }
 
     private fun fetchHttpsViaConnect(
-        request: WebResourceRequest,
+        request: ProxyHttpRequest,
         decision: StreamProxyDecision,
         proxy: ParsedProxy,
         router: StreamProxyRequestRouter,
-    ): WebResourceResponse {
-        val requestUrl = request.url.toString()
+    ): ProxyHttpResponse {
+        val requestUrl = request.url
         val url = URL(requestUrl)
         val port = if (url.port != -1) url.port else 443
 
@@ -319,21 +317,21 @@ class StreamProxyFetcher(
                 )
                 sslSocket.close()
 
-                return WebResourceResponse(
-                    mimeType,
-                    encoding,
+                return ProxyHttpResponse(
                     status.statusCode,
                     status.reason,
+                    mimeType,
+                    encoding,
                     responseHeaders,
                     ByteArrayInputStream(bytes),
                 )
             }
 
-            return WebResourceResponse(
-                mimeType,
-                encoding,
+            return ProxyHttpResponse(
                 status.statusCode,
                 status.reason,
+                mimeType,
+                encoding,
                 responseHeaders,
                 bodyStream,
             )
@@ -427,7 +425,7 @@ class StreamProxyFetcher(
 
     private fun writeOriginRequest(
         output: java.io.OutputStream,
-        request: WebResourceRequest,
+        request: ProxyHttpRequest,
         url: URL,
     ) {
         val path = url.file.takeIf(String::isNotEmpty) ?: "/"
@@ -443,7 +441,7 @@ class StreamProxyFetcher(
                 append(url.port)
             }
             append("\r\n")
-            copyRequestHeaders(request.requestHeaders ?: emptyMap()) { name, value ->
+            copyRequestHeaders(request.headers) { name, value ->
                 append(name)
                 append(": ")
                 append(value)

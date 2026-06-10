@@ -17,6 +17,11 @@ class TwitchApi extends BaseApiClient {
   static const String _oauthBaseUrl = 'https://id.twitch.tv/oauth2';
   static const String _recentMessagesUrl =
       'https://recent-messages.robotty.de/api/v2';
+  static const String _gqlUrl = 'https://gql.twitch.tv/gql';
+
+  /// The public Twitch web player client ID, required by the playback access
+  /// token GraphQL operation.
+  static const String _gqlClientId = 'kimne78kx3ncx6brgo4mv6wki5h0ko';
 
   TwitchApi(Dio dio) : super(dio, _helixBaseUrl);
 
@@ -464,5 +469,45 @@ class TwitchApi extends BaseApiClient {
     );
 
     return data['messages'] as JsonList;
+  }
+
+  /// Returns the usher (HLS master playlist) URL for a live channel.
+  ///
+  /// Uses the public web player GraphQL endpoint to obtain a playback access
+  /// token; the app's own client ID is not authorized for this operation.
+  Future<String> getStreamPlaybackUrl({required String userLogin}) async {
+    final login = userLogin.trim().toLowerCase();
+
+    final data = await post<JsonMap>(
+      _gqlUrl,
+      headers: {'Client-Id': _gqlClientId},
+      data: {
+        'operationName': 'PlaybackAccessToken_Template',
+        'query':
+            'query PlaybackAccessToken_Template(\$login: String!, \$isLive: Boolean!, \$vodID: ID!, \$isVod: Boolean!, \$playerType: String!) { streamPlaybackAccessToken(channelName: \$login, params: {platform: "web", playerBackend: "mediaplayer", playerType: \$playerType}) @include(if: \$isLive) { value signature __typename } videoPlaybackAccessToken(id: \$vodID, params: {platform: "web", playerBackend: "mediaplayer", playerType: \$playerType}) @include(if: \$isVod) { value signature __typename }}',
+        'variables': {
+          'isLive': true,
+          'login': login,
+          'isVod': false,
+          'vodID': '',
+          'playerType': 'site',
+        },
+      },
+    );
+
+    final token = (data['data'] as JsonMap?)?['streamPlaybackAccessToken'];
+    if (token is! JsonMap) {
+      throw const ApiException('Failed to get stream playback access token');
+    }
+
+    return Uri.https('usher.ttvnw.net', '/api/channel/hls/$login.m3u8', {
+      'allow_source': 'true',
+      'allow_audio_only': 'false',
+      'fast_bread': 'true',
+      'player_backend': 'mediaplayer',
+      'playlist_include_framerate': 'true',
+      'sig': token['signature'] as String,
+      'token': token['value'] as String,
+    }).toString();
   }
 }

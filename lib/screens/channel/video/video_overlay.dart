@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:frosty/screens/channel/chat/details/chat_users_list.dart';
 import 'package:frosty/screens/channel/chat/stores/chat_store.dart';
+import 'package:frosty/screens/channel/video/cast_store.dart';
 import 'package:frosty/screens/channel/video/stream_info_bar.dart';
 import 'package:frosty/screens/channel/video/video_store.dart';
 import 'package:frosty/screens/settings/stores/settings_store.dart';
@@ -44,6 +45,119 @@ class VideoOverlay extends StatelessWidget {
           stops: const [0.0, 0.25, 0.5, 0.8, 1.0],
         ),
       );
+
+  void _showCastSheet(BuildContext context) {
+    final castStore = videoStore.castStore;
+    castStore.searchDevices();
+
+    showModalBottomSheetWithProperFocus(
+      context: context,
+      builder: (context) => Observer(
+        builder: (context) {
+          final isConnected =
+              castStore.connectionState == CastConnectionState.connected;
+
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SectionHeader(
+                'Cast to device',
+                padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+                isFirst: true,
+              ),
+              if (castStore.error != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Text(
+                    castStore.error!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ),
+              if (castStore.connectionState == CastConnectionState.connecting)
+                const ListTile(
+                  leading: SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  title: Text('Connecting...'),
+                )
+              else if (isConnected) ...[
+                ListTile(
+                  leading: const Icon(Icons.cast_connected_rounded),
+                  title: Text(castStore.connectedDeviceName ?? 'Connected'),
+                  trailing: TextButton(
+                    onPressed: () {
+                      castStore.disconnect();
+                      Navigator.pop(context);
+                    },
+                    child: const Text('Disconnect'),
+                  ),
+                ),
+                const SectionHeader(
+                  'Stream quality',
+                  padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
+                ),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    primary: false,
+                    children: castStore.qualityOptions
+                        .map(
+                          (quality) => ListTile(
+                            trailing: castStore.selectedQuality == quality
+                                ? const Icon(Icons.check_rounded)
+                                : null,
+                            title: Text(quality),
+                            onTap: () => castStore.setQuality(quality),
+                          ),
+                        )
+                        .toList(),
+                  ),
+                ),
+              ] else if (castStore.isSearching && castStore.devices.isEmpty)
+                const ListTile(
+                  leading: SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  title: Text('Searching for devices...'),
+                )
+              else if (castStore.devices.isEmpty)
+                ListTile(
+                  leading: const Icon(Icons.cast_rounded),
+                  title: const Text('No devices found'),
+                  trailing: TextButton(
+                    onPressed: castStore.searchDevices,
+                    child: const Text('Retry'),
+                  ),
+                )
+              else
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    primary: false,
+                    children: castStore.devices
+                        .map(
+                          (device) => ListTile(
+                            leading: const Icon(Icons.tv_rounded),
+                            title: Text(device.name),
+                            onTap: () => castStore.connect(device),
+                          ),
+                        )
+                        .toList(),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -118,6 +232,28 @@ class VideoOverlay extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+        );
+      },
+    );
+
+    final castButton = Observer(
+      builder: (_) {
+        final castStore = videoStore.castStore;
+        if (!castStore.isSupported) return const SizedBox.shrink();
+
+        return Tooltip(
+          message: 'Cast to device',
+          preferBelow: false,
+          child: IconButton(
+            icon: Icon(
+              castStore.connectionState == CastConnectionState.connected
+                  ? Icons.cast_connected_rounded
+                  : Icons.cast_rounded,
+              color: surfaceColor,
+              shadows: kOverlayShadow,
+            ),
+            onPressed: () => _showCastSheet(context),
           ),
         );
       },
@@ -330,6 +466,7 @@ class VideoOverlay extends StatelessWidget {
                     if (videoStore.settingsStore.fullScreen &&
                         context.isLandscape)
                       chatOverlayButton,
+                    castButton,
                     videoSettingsButton,
                   ],
                 ),

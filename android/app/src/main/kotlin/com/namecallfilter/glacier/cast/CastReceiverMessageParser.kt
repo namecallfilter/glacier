@@ -1,5 +1,8 @@
 package com.namecallfilter.glacier.cast
 
+import com.namecallfilter.glacier.streamproxy.CastMode
+import java.util.Locale
+
 object CastReceiverMessageParser {
     fun parse(message: String): CastReceiverStatus? {
         if (stringField(message, "type") != "status") return null
@@ -9,7 +12,9 @@ object CastReceiverMessageParser {
 
         return CastReceiverStatus(
             latencyMs = latencyMs,
+            mode = stringField(message, "mode"),
             playerState = stringField(message, "playerState"),
+            error = stringField(message, "error"),
             currentTimeSec = doubleField(message, "currentTimeSec"),
             rangeStartSec = doubleField(message, "rangeStartSec"),
             rangeEndSec = doubleField(message, "rangeEndSec"),
@@ -25,7 +30,9 @@ object CastReceiverMessageParser {
 
     private fun stringField(message: String, name: String): String? {
         return rawField(message, name)
+            ?.trim()
             ?.takeIf { value -> !value.startsWith("{") && !value.startsWith("[") }
+            ?.takeIf { value -> !value.equals("null", ignoreCase = true) }
             ?.takeIf(String::isNotBlank)
     }
 
@@ -67,7 +74,9 @@ object CastReceiverMessageParser {
 
 data class CastReceiverStatus(
     val latencyMs: Long?,
+    val mode: String?,
     val playerState: String?,
+    val error: String?,
     val currentTimeSec: Double?,
     val rangeStartSec: Double?,
     val rangeEndSec: Double?,
@@ -77,4 +86,12 @@ data class CastReceiverStatus(
     val requestedPlaybackRate: Double?,
     val correction: String?,
     val latencyBeforeCorrectionMs: Long?,
-)
+) {
+    fun appliesTo(activeMode: CastMode): Boolean {
+        val statusMode = mode?.lowercase(Locale.US) ?: return true
+        return when (activeMode) {
+            CastMode.STABLE_HLS -> statusMode != "webrtc"
+            CastMode.LOW_LATENCY -> statusMode != "hls"
+        }
+    }
+}

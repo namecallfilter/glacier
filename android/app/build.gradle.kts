@@ -76,6 +76,15 @@ android {
         )
     }
 
+    packaging {
+        jniLibs {
+            // MediaMTX is packaged as libmediamtx.so so Android extracts it into
+            // applicationInfo.nativeLibraryDir as a real executable file.
+            useLegacyPackaging = true
+            keepDebugSymbols += "**/libmediamtx.so"
+        }
+    }
+
     signingConfigs {
         create("release") {
             keyAlias = keystoreProperties["keyAlias"] as String?

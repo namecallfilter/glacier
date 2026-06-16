@@ -9,6 +9,11 @@ enum class StreamProxyMode {
     TTV_LOL_PRO,
 }
 
+enum class CastMode {
+    STABLE_HLS,
+    LOW_LATENCY,
+}
+
 enum class StreamProxyRequestType(val logName: String) {
     PASSPORT("passport"),
     USHER("usher"),
@@ -37,16 +42,35 @@ data class StreamProxyConfig(
     val currentChannelLogin: String,
     val proxyUrls: List<String>,
     val whitelistedChannels: Set<String>,
+    val castMode: CastMode = CastMode.STABLE_HLS,
+    val webRtcGatewayUrl: String = "",
+    val whepUrlOverride: String = "",
+    val webRtcAutoFallback: Boolean = false,
     val debugLogging: Boolean,
 ) {
     val enabled: Boolean
         get() = mode == StreamProxyMode.TTV_LOL_PRO
+
+    val externalWhepUrl: String
+        get() {
+            if (whepUrlOverride.isNotBlank()) return whepUrlOverride
+            if (webRtcGatewayUrl.isBlank() || currentChannelLogin.isBlank()) {
+                return ""
+            }
+
+            val gateway = webRtcGatewayUrl.trim().trimEnd('/')
+            return "$gateway/$currentChannelLogin/whep"
+        }
 
     companion object {
         fun fromMap(map: Map<*, *>?): StreamProxyConfig {
             val mode = when (map?.get("mode") as? String) {
                 "ttvLolPro" -> StreamProxyMode.TTV_LOL_PRO
                 else -> StreamProxyMode.OFF
+            }
+            val castMode = when (map?.get("castMode") as? String) {
+                "lowLatency" -> CastMode.LOW_LATENCY
+                else -> CastMode.STABLE_HLS
             }
 
             return StreamProxyConfig(
@@ -59,8 +83,18 @@ data class StreamProxyConfig(
                 whitelistedChannels = stringList(map, "whitelistedChannels")
                     .map { it.lowercase(Locale.US) }
                     .toSet(),
+                castMode = castMode,
+                webRtcGatewayUrl = stringValue(map, "webRtcGatewayUrl"),
+                whepUrlOverride = stringValue(map, "whepUrlOverride"),
+                webRtcAutoFallback = (map?.get("webRtcAutoFallback") as? Boolean) ?: false,
                 debugLogging = (map?.get("debugLogging") as? Boolean) ?: false,
             )
+        }
+
+        private fun stringValue(map: Map<*, *>?, key: String): String {
+            return (map?.get(key) as? String)
+                ?.trim()
+                .orEmpty()
         }
 
         private fun stringList(map: Map<*, *>?, key: String): List<String> {

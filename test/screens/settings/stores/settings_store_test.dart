@@ -14,6 +14,10 @@ void main() {
       expect(store.showVideo, isTrue);
       expect(store.defaultToHighestQuality, isFalse);
       expect(store.useTextureRendering, isTrue);
+      expect(store.castMode, CastMode.stableHls);
+      expect(store.webRtcGatewayUrl, '');
+      expect(store.whepUrlOverride, '');
+      expect(store.webRtcAutoFallback, isFalse);
       expect(store.streamProxyMode, StreamProxyMode.off);
       expect(store.streamProxyUrls, isEmpty);
       expect(store.streamProxyWhitelistedChannels, isEmpty);
@@ -69,6 +73,10 @@ void main() {
       store.chatDelay = 5.0;
       store.syncedChatDelay = 8.0;
       store.showVideo = false;
+      store.castMode = CastMode.lowLatency;
+      store.webRtcGatewayUrl = 'https://media.example.com';
+      store.whepUrlOverride = 'https://media.example.com/streamer/whep';
+      store.webRtcAutoFallback = true;
       store.streamProxyMode = StreamProxyMode.ttvLolPro;
       store.streamProxyUrls = [
         'proxy.example.com:3128',
@@ -91,6 +99,13 @@ void main() {
       expect(restored.syncedChatDelay, 0.0);
       expect(json.containsKey('syncedChatDelay'), isFalse);
       expect(restored.showVideo, isFalse);
+      expect(restored.castMode, CastMode.lowLatency);
+      expect(restored.webRtcGatewayUrl, 'https://media.example.com');
+      expect(
+        restored.whepUrlOverride,
+        'https://media.example.com/streamer/whep',
+      );
+      expect(restored.webRtcAutoFallback, isTrue);
       expect(restored.streamProxyMode, StreamProxyMode.ttvLolPro);
       expect(restored.streamProxyUrls, [
         'proxy.example.com:3128',
@@ -121,6 +136,13 @@ void main() {
       });
       expect(store.streamProxyMode, StreamProxyMode.off);
     });
+
+    test('unknown CastMode enum value falls back to stable HLS', () {
+      final store = SettingsStore.fromJson({
+        'castMode': 'nonexistent_cast_mode',
+      });
+      expect(store.castMode, CastMode.stableHls);
+    });
   });
 
   group('SettingsStore reset actions', () {
@@ -148,6 +170,10 @@ void main() {
       store.showVideo = false;
       store.defaultToHighestQuality = true;
       store.useTextureRendering = false;
+      store.castMode = CastMode.lowLatency;
+      store.webRtcGatewayUrl = 'https://media.example.com';
+      store.whepUrlOverride = 'https://media.example.com/streamer/whep';
+      store.webRtcAutoFallback = true;
       store.streamProxyMode = StreamProxyMode.ttvLolPro;
       store.streamProxyUrls = ['proxy.example.com:3128'];
       store.streamProxyWhitelistedChannels = ['streamer_name123'];
@@ -160,6 +186,10 @@ void main() {
       expect(store.showVideo, isTrue);
       expect(store.defaultToHighestQuality, isFalse);
       expect(store.useTextureRendering, isTrue);
+      expect(store.castMode, CastMode.stableHls);
+      expect(store.webRtcGatewayUrl, '');
+      expect(store.whepUrlOverride, '');
+      expect(store.webRtcAutoFallback, isFalse);
       expect(store.streamProxyMode, StreamProxyMode.off);
       expect(store.streamProxyUrls, isEmpty);
       expect(store.streamProxyWhitelistedChannels, isEmpty);
@@ -312,6 +342,12 @@ void main() {
       expect(streamProxyModeNames.length, StreamProxyMode.values.length);
       expect(streamProxyModeNames[0], 'Off');
       expect(streamProxyModeNames[1], 'On');
+    });
+
+    test('castModeNames matches CastMode order', () {
+      expect(castModeNames.length, CastMode.values.length);
+      expect(castModeNames[0], 'Stable HLS');
+      expect(castModeNames[1], 'Low Latency');
     });
   });
 }

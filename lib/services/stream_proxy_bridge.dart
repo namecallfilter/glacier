@@ -121,9 +121,9 @@ class StreamProxyBridge {
     await _invokeStatic('selectCastRoute', {'routeId': route.id});
   }
 
-  static Future<void> stopCasting() async {
+  static Future<void> stopCasting({String reason = 'unknown'}) async {
     if (!Platform.isAndroid) return;
-    await _invokeStatic('stopCasting', const {});
+    await _invokeStatic('stopCasting', {'reason': reason});
   }
 
   static Future<void> _invokeStatic(

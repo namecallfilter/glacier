@@ -14,7 +14,7 @@ if (!inlineScriptBody) {
 
 const inlineScript = `(() => {${inlineScriptBody}})();`;
 
-const createHarness = () => {
+const createHarness = ({fetchImpl} = {}) => {
 	let nowMs = 0;
 	const intervals = [];
 	const sentMessages = [];
@@ -23,6 +23,8 @@ const createHarness = () => {
 	const loadInterceptors = new Map();
 	const seekCalls = [];
 	const loadCalls = [];
+	const peerConnections = [];
+	const fetchCalls = [];
 
 	let liveRange = {start: 0, end: 0};
 	let currentTimeSec = 0;
@@ -30,6 +32,17 @@ const createHarness = () => {
 	let playbackRate = 1.0;
 	let playbackConfig = null;
 	let receiverOptions = null;
+	const videoElement = {
+		autoplay: true,
+		playsInline: true,
+		srcObject: null,
+		style: {},
+		playbackRate,
+		play: () => Promise.resolve(),
+	};
+	const castMediaPlayerElement = {
+		style: {},
+	};
 
 	const playerManager = {
 		getLiveSeekableRange: () => liveRange,
@@ -96,11 +109,60 @@ const createHarness = () => {
 			now: () => nowMs,
 		},
 		document: {
-			querySelector: () => ({playbackRate}),
+			getElementById: (id) => {
+				if (id === 'webrtc-video') return videoElement;
+				if (id === 'hls-player') return castMediaPlayerElement;
+				return null;
+			},
+			querySelector: (selector) => {
+				if (selector === 'video, audio') return {playbackRate};
+				if (selector === 'cast-media-player') return castMediaPlayerElement;
+				if (selector === 'video') return videoElement;
+				return null;
+			},
 		},
+		fetch: fetchImpl || (async (url, options) => {
+			fetchCalls.push({url, options});
+			return {
+				ok: true,
+				status: 201,
+				text: async () => 'answer-sdp',
+			};
+		}),
 		JSON,
 		Math,
 		Number,
+		RTCPeerConnection: function RTCPeerConnection() {
+			const connection = {
+				addTransceiver: () => {},
+				createOffer: async () => ({type: 'offer', sdp: 'offer-sdp'}),
+				setLocalDescription: async (description) => {
+					connection.localDescription = description;
+				},
+				setRemoteDescription: async (description) => {
+					connection.remoteDescription = description;
+				},
+				close: () => {
+					connection.closed = true;
+				},
+				ontrack: null,
+				onconnectionstatechange: null,
+				connectionState: 'new',
+			};
+			peerConnections.push(connection);
+			return connection;
+		},
+		RTCSessionDescription: function RTCSessionDescription(description) {
+			return description;
+		},
+		MediaStream: function MediaStream() {
+			return {
+				tracks: [],
+				addTrack(track) {
+					this.tracks.push(track);
+				},
+			};
+		},
 		setInterval: (callback, delayMs) => {
 			intervals.push({callback, delayMs});
 			return intervals.length;
@@ -147,55 +209,88 @@ const createHarness = () => {
 			nowMs += ms;
 		},
 		runLatencyCheck() {
-			runInterval(500);
+			runInterval(5000);
 		},
 		runStatusReport() {
 			runInterval(1000);
 		},
 		runLoadInterceptor,
+		dispatchCustomMessage(message) {
+			const listener = messageListeners.get('urn:x-cast:com.namecallfilter.glacier.cast');
+			if (!listener) {
+				throw new Error('Missing custom message listener');
+			}
+			return listener({
+				data: message,
+				senderId: 'sender-1',
+			});
+		},
+		videoElement,
+		castMediaPlayerElement,
+		peerConnections,
+		fetchCalls,
 	};
 };
 
-test('configures Shaka for stable low-latency live playback', () => {
+test('configures Shaka for conservative stable HLS live playback', () => {
 	const harness = createHarness();
 
 	assert.equal(harness.receiverOptions.useShakaForHls, true);
-	assert.equal(harness.playbackConfig.shakaConfig.streaming.lowLatencyMode, true);
+	assert.equal(harness.playbackConfig.autoResumeNumberOfSegments, 2);
+	assert.equal(harness.playbackConfig.enableSmoothLiveRefresh, true);
+	assert.equal(harness.playbackConfig.segmentRequestRetryLimit, 5);
+	assert.equal(harness.playbackConfig.shakaConfig.streaming.lowLatencyMode, false);
+	assert.equal(harness.playbackConfig.shakaConfig.streaming.bufferingGoal, 30);
+	assert.equal(harness.playbackConfig.shakaConfig.streaming.rebufferingGoal, 8);
+	assert.equal(harness.playbackConfig.shakaConfig.streaming.bufferBehind, 60);
+	assert.equal(harness.playbackConfig.shakaConfig.streaming.segmentPrefetchLimit, 0);
+	assert.equal(harness.playbackConfig.shakaConfig.streaming.startAtSegmentBoundary, true);
 	assert.equal(harness.playbackConfig.shakaConfig.streaming.liveSync.enabled, true);
-	assert.equal(harness.playbackConfig.shakaConfig.streaming.liveSync.targetLatency, 4.0);
-	assert.equal(harness.playbackConfig.shakaConfig.streaming.liveSync.maxPlaybackRate, 1.1);
-	assert.equal(harness.playbackConfig.shakaConfig.streaming.liveSync.minPlaybackRate, 0.98);
-	assert.equal(harness.playbackConfig.shakaConfig.streaming.liveSync.panicMode, true);
-	assert.equal(harness.playbackConfig.shakaConfig.streaming.liveSync.panicThreshold, 8.0);
-	assert.equal(harness.playbackConfig.shakaConfig.manifest.defaultPresentationDelay, 4.0);
+	assert.equal(harness.playbackConfig.shakaConfig.streaming.liveSync.targetLatency, 20.0);
+	assert.equal(harness.playbackConfig.shakaConfig.streaming.liveSync.maxPlaybackRate, 1.03);
+	assert.equal(harness.playbackConfig.shakaConfig.streaming.liveSync.minPlaybackRate, 0.97);
+	assert.equal(harness.playbackConfig.shakaConfig.streaming.liveSync.panicMode, false);
+	assert.equal(harness.playbackConfig.shakaConfig.streaming.liveSync.panicThreshold, 45.0);
+	assert.equal(harness.playbackConfig.shakaConfig.manifest.defaultPresentationDelay, 20.0);
+	assert.equal(harness.playbackConfig.shakaConfig.manifest.updatePeriod, 2);
 });
 
-test('emergency latency bypasses normal seek cooldown', () => {
+test('stable HLS does not auto-seek when playback is merely behind live', () => {
 	const harness = createHarness();
 
 	harness.setPlayerState('BUFFERING');
-	harness.setLiveStatus({rangeEnd: 50, currentTime: 41});
+	harness.setLiveStatus({rangeEnd: 80, currentTime: 25});
+	harness.runLatencyCheck();
+
+	assert.equal(harness.seekCalls.length, 0);
+	assert.equal(harness.loadCalls.length, 0);
+	assert.ok(
+		harness.sentMessages.some((message) =>
+			message.mode === 'hls' &&
+				message.correction === 'latencyObserved',
+		),
+	);
+});
+
+test('stable HLS only jumps automatically when latency is far outside the safe window', () => {
+	const harness = createHarness();
+
+	harness.setPlayerState('BUFFERING');
+	harness.setLiveStatus({rangeEnd: 120, currentTime: 30});
 	harness.runLatencyCheck();
 
 	assert.equal(harness.seekCalls.length, 1);
-	assert.equal(harness.seekCalls[0].currentTime, 46);
-
-	harness.advance(1000);
-	harness.setLiveStatus({rangeEnd: 52, currentTime: 41});
-	harness.runLatencyCheck();
-
-	assert.equal(harness.seekCalls.length, 2);
-	assert.equal(harness.seekCalls[1].currentTime, 48);
+	assert.equal(harness.seekCalls[0].currentTime, 100);
 	assert.ok(
 		harness.consoleMessages.some((message) =>
 			message.includes('action=max_latency') &&
-				message.includes('latency_ms=11000') &&
+				message.includes('latency_ms=90000') &&
 				message.includes('emergency=true'),
 		),
 	);
 });
 
-test('reloads the current media after sustained emergency latency', () => {
+test('stable HLS does not repeatedly reload when playback is behind live', () => {
 	const harness = createHarness();
 	const loadRequestData = {
 		media: {
@@ -206,10 +301,10 @@ test('reloads the current media after sustained emergency latency', () => {
 	const interceptedLoad = harness.runLoadInterceptor(loadRequestData);
 
 	harness.setPlayerState('BUFFERING');
-	harness.setLiveStatus({rangeEnd: 100, currentTime: 80});
+	harness.setLiveStatus({rangeEnd: 100, currentTime: 45});
 	harness.runLatencyCheck();
 
-	assert.equal(harness.seekCalls.length, 1);
+	assert.equal(harness.seekCalls.length, 0);
 
 	for (let index = 0; index < 3; index += 1) {
 		harness.advance(500);
@@ -217,12 +312,114 @@ test('reloads the current media after sustained emergency latency', () => {
 		harness.runLatencyCheck();
 	}
 
-	assert.equal(harness.loadCalls.length, 1);
-	assert.equal(harness.loadCalls[0], interceptedLoad);
-	assert.equal(harness.loadCalls[0].autoplay, true);
-	assert.equal(harness.loadCalls[0].media.streamType, 'LIVE');
+	assert.equal(harness.loadCalls.length, 0);
+	assert.equal(interceptedLoad.autoplay, true);
+	assert.equal(interceptedLoad.media.streamType, 'LIVE');
+});
+
+test('WebRTC mode uses a plain video element and WHEP instead of cast-media-player playback', async () => {
+	const harness = createHarness();
+
+	await harness.dispatchCustomMessage({
+		type: 'startWebRtc',
+		channelLogin: 'streamer',
+		title: 'Streamer',
+		whepUrl: 'https://media.example.com/streamer/whep',
+		gatewayHostedOnPhone: true,
+	});
+
+	assert.equal(harness.fetchCalls.length, 1);
+	assert.equal(harness.fetchCalls[0].url, 'https://media.example.com/streamer/whep');
+	assert.equal(harness.fetchCalls[0].options.method, 'POST');
+	assert.equal(harness.fetchCalls[0].options.headers['Content-Type'], 'application/sdp');
+	assert.equal(harness.peerConnections.length, 1);
+	assert.equal(harness.peerConnections[0].localDescription.sdp, 'offer-sdp');
+	assert.equal(harness.peerConnections[0].remoteDescription.type, 'answer');
+	assert.notEqual(harness.videoElement.srcObject, null);
+	assert.equal(harness.castMediaPlayerElement.style.display, 'none');
 	assert.ok(
-		harness.sentMessages.some((message) => message.correction === 'maxLatencyReload'),
+		harness.sentMessages.some((message) =>
+				message.mode === 'webrtc' &&
+				message.playerState === 'connecting' &&
+				message.gatewayHostedOnPhone === true,
+		),
+	);
+});
+
+test('WebRTC mode reports a clear failure when WHEP setup fails', async () => {
+	const harness = createHarness();
+
+	harness.fetchCalls.length = 0;
+	await harness.dispatchCustomMessage({
+		type: 'startWebRtc',
+		channelLogin: 'streamer',
+		title: 'Streamer',
+		whepUrl: '',
+	});
+
+	assert.ok(
+		harness.sentMessages.some((message) =>
+			message.mode === 'webrtc' &&
+				message.playerState === 'failed' &&
+				message.error.includes('Missing WHEP URL'),
+		),
+	);
+});
+
+test('WebRTC mode explains phone-hosted gateway reachability failures', async () => {
+	const harness = createHarness({
+		fetchImpl: async () => {
+			throw new TypeError('Failed to fetch');
+		},
+	});
+
+	await harness.dispatchCustomMessage({
+		type: 'startWebRtc',
+		channelLogin: 'streamer',
+		title: 'Streamer',
+		whepUrl: 'http://192.168.5.42:8889/streamer/whep',
+		gatewayHostedOnPhone: true,
+	});
+
+	assert.ok(
+		harness.sentMessages.some((message) =>
+			message.mode === 'webrtc' &&
+				message.playerState === 'failed' &&
+				message.error.includes('Phone WebRTC gateway is unreachable'),
+		),
+	);
+});
+
+test('WebRTC mode includes WHEP response error details', async () => {
+	const harness = createHarness({
+		fetchImpl: async (url, options) => {
+			harness.fetchCalls.push({url, options});
+			return {
+				ok: false,
+				status: 400,
+				text: async () => JSON.stringify({
+					status: 'error',
+					error: 'error getting local interfaces: route ip+net: netlinkrib: permission denied',
+				}),
+			};
+		},
+	});
+
+	await harness.dispatchCustomMessage({
+		type: 'startWebRtc',
+		channelLogin: 'streamer',
+		title: 'Streamer',
+		whepUrl: 'http://192.168.5.42:8889/streamer/whep',
+		gatewayHostedOnPhone: true,
+	});
+
+	assert.ok(
+		harness.sentMessages.some((message) =>
+			message.mode === 'webrtc' &&
+				message.playerState === 'failed' &&
+				message.error.includes('WHEP request failed with status 400') &&
+				message.error.includes('error getting local interfaces'),
+		),
 	);
 });
 

@@ -55,19 +55,39 @@ class CastRelayServerTest {
     }
 
     @Test
-    fun forcesFreshUpstreamPlaylistRequestsButKeepsRangeForMediaRequests() {
+    fun forcesFreshUpstreamPlaylistRequestsAndFetchesFullMediaObjects() {
         RawUpstreamServer { request, output ->
             val contentType = if (request.target.contains(".m3u8")) {
                 "application/vnd.apple.mpegurl"
             } else {
                 "video/mp2t"
             }
-            val body = if (request.target.contains(".m3u8")) {
-                "#EXTM3U\n#EXT-X-TARGETDURATION:2\n"
-            } else {
-                "segment"
+            if (request.target.contains(".m3u8")) {
+                writeHttpResponse(
+                    output = output,
+                    contentType = contentType,
+                    body = "#EXTM3U\n#EXT-X-TARGETDURATION:2\n",
+                )
+                return@RawUpstreamServer
             }
-            writeHttpResponse(output, contentType, body)
+
+            writeHttpResponse(
+                output = output,
+                contentType = contentType,
+                body = "segment",
+                statusCode = if (request.hasHeader("Range")) 206 else 200,
+                reasonPhrase = if (request.hasHeader("Range")) {
+                    "Partial Content"
+                } else {
+                    "OK"
+                },
+                headers = buildMap {
+                    put("Accept-Ranges", "bytes")
+                    if (request.hasHeader("Range")) {
+                        put("Content-Range", "bytes 0-2/7")
+                    }
+                },
+            )
         }.use { upstream ->
             CastRelayServer(log = {}).use { relay ->
                 val playlistRelayUrl = localRelayUrl(
@@ -77,6 +97,7 @@ class CastRelayServerTest {
                     playlistRelayUrl,
                     headers = mapOf(
                         "Range" to "bytes=0-99",
+                        "If-Range" to "\"old-range\"",
                         "If-Match" to "\"old-match\"",
                         "If-None-Match" to "\"old-none-match\"",
                         "If-Modified-Since" to "Wed, 21 Oct 2015 07:28:00 GMT",
@@ -86,6 +107,7 @@ class CastRelayServerTest {
 
                 val playlistRequest = upstream.takeRequest()
                 assertFalse(playlistRequest.hasHeader("Range"))
+                assertFalse(playlistRequest.hasHeader("If-Range"))
                 assertFalse(playlistRequest.hasHeader("If-Match"))
                 assertFalse(playlistRequest.hasHeader("If-None-Match"))
                 assertFalse(playlistRequest.hasHeader("If-Modified-Since"))
@@ -99,10 +121,29 @@ class CastRelayServerTest {
                 val mediaRelayUrl = localRelayUrl(
                     relay.relayUrlFor(upstream.url("/segment.ts")),
                 )
-                get(mediaRelayUrl, headers = mapOf("Range" to "bytes=0-99"))
+                val mediaResponse = get(
+                    mediaRelayUrl,
+                    headers = mapOf(
+                        "Range" to "bytes=0-99",
+                        "If-Range" to "\"old-range\"",
+                        "If-Match" to "\"old-match\"",
+                        "If-None-Match" to "\"old-none-match\"",
+                        "If-Modified-Since" to "Wed, 21 Oct 2015 07:28:00 GMT",
+                        "If-Unmodified-Since" to "Wed, 21 Oct 2015 07:28:00 GMT",
+                    ),
+                )
 
                 val mediaRequest = upstream.takeRequest()
-                assertEquals("bytes=0-99", mediaRequest.header("Range"))
+                assertFalse(mediaRequest.hasHeader("Range"))
+                assertFalse(mediaRequest.hasHeader("If-Range"))
+                assertFalse(mediaRequest.hasHeader("If-Match"))
+                assertFalse(mediaRequest.hasHeader("If-None-Match"))
+                assertFalse(mediaRequest.hasHeader("If-Modified-Since"))
+                assertFalse(mediaRequest.hasHeader("If-Unmodified-Since"))
+                assertEquals(200, mediaResponse.statusCode)
+                assertEquals("segment", mediaResponse.body)
+                assertEquals("none", mediaResponse.headers["accept-ranges"])
+                assertFalse(mediaResponse.headers.containsKey("content-range"))
             }
         }
     }
@@ -184,19 +225,30 @@ class CastRelayServerTest {
                     relay.relayUrlFor(upstream.url("/segment.ts")),
                 )
 
-                val response = get(relayUrl)
+                val response = get(
+                    relayUrl,
+                    headers = mapOf("Range" to "bytes=0-99"),
+                )
 
                 assertEquals("segment", response.body)
-                val responseLog = logs.firstOrNull { log ->
+                val upstreamRequest = upstream.takeRequest()
+                assertFalse(upstreamRequest.hasHeader("Range"))
+
+                val responseLog = waitForLog(logs) { log ->
                     log.contains("cast_relay action=response") &&
                         log.contains("playlist=false")
-                } ?: error("Expected media response timing log in $logs")
+                }
 
                 assertTrue(responseLog.contains("upstream_connect_ms="))
                 assertTrue(responseLog.contains("upstream_first_byte_ms="))
                 assertTrue(responseLog.contains("total_ms="))
                 assertTrue(responseLog.contains("bytes=7"))
                 assertTrue(responseLog.contains("playlist=false"))
+                assertTrue(responseLog.contains("inbound_range=bytes=0-99"))
+                assertTrue(responseLog.contains("range_stripped=true"))
+                assertTrue(responseLog.contains("upstream_status=200"))
+                assertTrue(responseLog.contains("response_status=200"))
+                assertTrue(responseLog.contains("upstream_content_length=7"))
             }
         }
     }
@@ -230,10 +282,10 @@ class CastRelayServerTest {
                 val response = get(relayUrl)
 
                 assertTrue(response.body.contains("#EXTM3U"))
-                val responseLog = logs.firstOrNull { log ->
+                val responseLog = waitForLog(logs) { log ->
                     log.contains("cast_relay action=response") &&
                         log.contains("playlist=true")
-                } ?: error("Expected playlist response timing log in $logs")
+                }
 
                 assertTrue(responseLog.contains("upstream_connect_ms="))
                 assertTrue(responseLog.contains("upstream_first_byte_ms="))
@@ -243,6 +295,41 @@ class CastRelayServerTest {
                 assertTrue(responseLog.contains("program_date_time=2026-06-12T10:00:02.000Z"))
                 assertTrue(responseLog.contains("target_duration=2"))
                 assertTrue(responseLog.contains("last_segment_uri=segment-778.ts"))
+            }
+        }
+    }
+
+    @Test
+    fun keepsProxyingRepeatedVideoWeaverPlaylistRefreshesForRelayClients() {
+        RawUpstreamServer { _, output ->
+            writeHttpResponse(
+                output = output,
+                contentType = "application/vnd.apple.mpegurl",
+                body = """
+                    #EXTM3U
+                    #EXT-X-TARGETDURATION:2
+                    #EXTINF:2.000,
+                    segment.ts
+                """.trimIndent(),
+            )
+        }.use { proxy ->
+            CastRelayServer(log = {}).use { relay ->
+                relay.update(
+                    router = StreamProxyRequestRouter(),
+                    config = enabledProxyConfig(proxy.url("/")),
+                )
+                val sourceUrl = "http://eus21.playlist.ttvnw.net/v1/playlist/live.m3u8"
+                val relayUrl = localRelayUrl(relay.relayUrlFor(sourceUrl))
+
+                get(relayUrl)
+                get(relayUrl)
+
+                val firstRequest = proxy.takeRequest()
+                val secondRequest = proxy.takeRequest()
+                assertEquals("GET", firstRequest.method)
+                assertEquals(sourceUrl, firstRequest.target)
+                assertEquals("GET", secondRequest.method)
+                assertEquals(sourceUrl, secondRequest.target)
             }
         }
     }
@@ -287,6 +374,20 @@ class CastRelayServerTest {
         }
     }
 
+    private fun waitForLog(
+        logs: List<String>,
+        predicate: (String) -> Boolean,
+    ): String {
+        val deadlineNs = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+
+        while (System.nanoTime() < deadlineNs) {
+            logs.firstOrNull(predicate)?.let { return it }
+            Thread.sleep(10)
+        }
+
+        error("Expected relay log in $logs")
+    }
+
     private fun get(
         url: String,
         headers: Map<String, String> = emptyMap(),
@@ -296,9 +397,14 @@ class CastRelayServerTest {
         connection.readTimeout = 2000
         headers.forEach(connection::setRequestProperty)
 
-        val body = connection.inputStream.use { input ->
+        val statusCode = connection.responseCode
+        val body = (if (statusCode >= 400) {
+            connection.errorStream
+        } else {
+            connection.inputStream
+        })?.use { input ->
             input.readBytes().toString(StandardCharsets.UTF_8)
-        }
+        }.orEmpty()
         val responseHeaders = connection.headerFields
             .mapNotNull { (name, values) ->
                 val value = values?.firstOrNull()
@@ -311,7 +417,11 @@ class CastRelayServerTest {
             .toMap()
         connection.disconnect()
 
-        return RelayResponse(body, responseHeaders)
+        return RelayResponse(
+            statusCode = statusCode,
+            body = body,
+            headers = responseHeaders,
+        )
     }
 
     private fun localRelayUrl(
@@ -322,11 +432,22 @@ class CastRelayServerTest {
         return "http://127.0.0.1:${uri.port}${uri.rawPath}$query"
     }
 
-    private data class RelayResponse(
-        val body: String,
-        val headers: Map<String, String>,
-    )
+    private fun enabledProxyConfig(proxyUrl: String): StreamProxyConfig {
+        return StreamProxyConfig(
+            mode = StreamProxyMode.TTV_LOL_PRO,
+            currentChannelLogin = "streamer",
+            proxyUrls = listOf(proxyUrl),
+            whitelistedChannels = emptySet(),
+            debugLogging = false,
+        )
+    }
 }
+
+private data class RelayResponse(
+    val statusCode: Int,
+    val body: String,
+    val headers: Map<String, String>,
+)
 
 private class RawUpstreamServer(
     private val handler: (RecordedRequest, OutputStream) -> Unit,
@@ -406,11 +527,17 @@ private fun writeHttpResponse(
     output: OutputStream,
     contentType: String,
     body: String,
+    statusCode: Int = 200,
+    reasonPhrase: String = "OK",
     headers: Map<String, String> = emptyMap(),
 ) {
     val bodyBytes = body.toByteArray(StandardCharsets.UTF_8)
     val responseHeaders = buildString {
-        append("HTTP/1.1 200 OK\r\n")
+        append("HTTP/1.1 ")
+        append(statusCode)
+        append(" ")
+        append(reasonPhrase)
+        append("\r\n")
         append("Content-Type: ")
         append(contentType)
         append("\r\n")

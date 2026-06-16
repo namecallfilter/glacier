@@ -13,6 +13,10 @@ void main() {
           'https://user:pass@proxy.example.com:443',
         ],
         whitelistedChannels: const ['Whitelisted_Channel'],
+        castMode: CastMode.lowLatency,
+        webRtcGatewayUrl: 'https://media.example.com',
+        whepUrlOverride: 'https://media.example.com/streamer/whep',
+        webRtcAutoFallback: true,
         debugLogging: false,
       );
 
@@ -24,8 +28,33 @@ void main() {
           'https://user:pass@proxy.example.com:443',
         ],
         'whitelistedChannels': ['whitelisted_channel'],
+        'castMode': 'lowLatency',
+        'webRtcGatewayUrl': 'https://media.example.com',
+        'whepUrlOverride': 'https://media.example.com/streamer/whep',
+        'webRtcAutoFallback': true,
         'debugLogging': false,
       });
+    });
+
+    test('fromSettings copies cast settings into Android bridge config', () {
+      final settingsStore = SettingsStore.fromJson({});
+      settingsStore.castMode = CastMode.lowLatency;
+      settingsStore.webRtcGatewayUrl = ' https://media.example.com ';
+      settingsStore.whepUrlOverride = ' https://media.example.com/live/whep ';
+      settingsStore.webRtcAutoFallback = true;
+
+      final config = StreamProxyConfig.fromSettings(
+        settingsStore: settingsStore,
+        currentChannelLogin: 'Streamer',
+        debugLogging: false,
+      );
+
+      expect(config.castMode, CastMode.lowLatency);
+      expect(config.webRtcGatewayUrl, ' https://media.example.com ');
+      expect(config.whepUrlOverride, ' https://media.example.com/live/whep ');
+      expect(config.webRtcAutoFallback, isTrue);
+      expect(config.toMethodChannelPayload()['castMode'], 'lowLatency');
+      expect(config.toMethodChannelPayload()['webRtcAutoFallback'], isTrue);
     });
   });
 

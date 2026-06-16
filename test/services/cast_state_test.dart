@@ -8,6 +8,8 @@ void main() {
         'isCasting': true,
         'receiverName': 'Jacoby\'s TV',
         'latencyMs': 7420,
+        'statusMessage': 'Missing WHEP URL',
+        'castMode': 'lowLatency',
       });
 
       expect(state.isCasting, isTrue);
@@ -15,6 +17,8 @@ void main() {
       expect(state.latency, const Duration(milliseconds: 7420));
       expect(state.latencySeconds, 7.42);
       expect(state.formattedLatency, '7.42s');
+      expect(state.statusMessage, 'Missing WHEP URL');
+      expect(state.castMode, 'lowLatency');
     });
 
     test('treats missing and malformed payloads as disconnected', () {

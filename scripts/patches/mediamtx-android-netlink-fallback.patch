@@ -1,0 +1,83 @@
+diff --git a/internal/protocols/webrtc/net.go b/internal/protocols/webrtc/net.go
+--- a/internal/protocols/webrtc/net.go
++++ b/internal/protocols/webrtc/net.go
+@@ -4,6 +4,7 @@ import (
+ 	"fmt"
+ 	"net"
++	"runtime"
+ 
+ 	"github.com/bluenviron/gortsplib/v5/pkg/readbuffer"
+ 	"github.com/pion/transport/v4"
+ 	"github.com/pion/transport/v4/stdnet"
+@@ -24,7 +25,13 @@ func interfaceIPs(interfaceList []string) ([]string, error) {
+ func (n *Net) Interfaces() ([]*transport.Interface, error) {
+ 	oifs, err := anet.Interfaces()
+ 	if err != nil {
+-		return nil, err
++		if runtime.GOOS == "android" {
++			// Android app sandboxes can deny netlink interface enumeration to embedded
++			// executables. Return an empty list and rely on explicit
++			// webrtcAdditionalHosts candidates from the app-generated config.
++			return nil, nil
++		}
++		return nil, err
+ 	}
+ 
+ 	ifs := make([]*transport.Interface, 0, len(oifs))
+@@ -35,7 +42,10 @@ func (n *Net) Interfaces() ([]*transport.Interface, error) {
+ 		var addrs []net.Addr
+ 		addrs, err = anet.InterfaceAddrsByInterface(&oifs[i])
+ 		if err != nil {
+-			return nil, err
++			if runtime.GOOS == "android" {
++				continue
++			}
++			return nil, err
+ 		}
+ 
+ 		for _, addr := range addrs {
+diff --git a/internal/protocols/webrtc/peer_connection.go b/internal/protocols/webrtc/peer_connection.go
+--- a/internal/protocols/webrtc/peer_connection.go
++++ b/internal/protocols/webrtc/peer_connection.go
+@@ -517,22 +517,27 @@ func (co *PeerConnection) addAdditionalCandidates(firstMedia *sdp.MediaDescripti
+ 			newAttrs := append([]sdp.Attribute(nil), firstMedia.Attributes[:i]...)
+ 
+ 			if co.ICEUDPMux != nil {
+-				port := strconv.FormatInt(int64(co.ICEUDPMux.GetListenAddresses()[0].(*net.UDPAddr).Port), 10)
++				listenAddresses := co.ICEUDPMux.GetListenAddresses()
++				if len(listenAddresses) != 0 {
++					if udpAddr, ok := listenAddresses[0].(*net.UDPAddr); ok {
++						port := strconv.FormatInt(int64(udpAddr.Port), 10)
+ 
+-				tmp, err := randUint32()
+-				if err != nil {
+-					return err
+-				}
+-				id := strconv.FormatInt(int64(tmp), 10)
++						tmp, err := randUint32()
++						if err != nil {
++							return err
++						}
++						id := strconv.FormatInt(int64(tmp), 10)
+ 
+-				newAttrs = append(newAttrs, sdp.Attribute{
+-					Key:   "candidate",
+-					Value: id + " 1 udp 2130706431 " + ip + " " + port + " typ host",
+-				})
+-				newAttrs = append(newAttrs, sdp.Attribute{
+-					Key:   "candidate",
+-					Value: id + " 2 udp 2130706431 " + ip + " " + port + " typ host",
+-				})
++						newAttrs = append(newAttrs, sdp.Attribute{
++							Key:   "candidate",
++							Value: id + " 1 udp 2130706431 " + ip + " " + port + " typ host",
++						})
++						newAttrs = append(newAttrs, sdp.Attribute{
++							Key:   "candidate",
++							Value: id + " 2 udp 2130706431 " + ip + " " + port + " typ host",
++						})
++					}
++				}
+ 			}
+ 
+ 			if co.ICETCPMux != nil {

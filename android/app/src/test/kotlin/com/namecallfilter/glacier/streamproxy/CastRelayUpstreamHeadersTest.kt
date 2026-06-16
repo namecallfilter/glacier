@@ -59,11 +59,12 @@ class CastRelayUpstreamHeadersTest {
     }
 
     @Test
-    fun forcesFreshPlaylistRequestsWithoutDroppingMediaRangeBehavior() {
+    fun forcesFreshPlaylistRequestsAndForcesFullMediaObjectFetches() {
         val playlistHeaders = CastRelayUpstreamHeaders.build(
             requestHeaders = mapOf(
                 "Accept" to "application/vnd.apple.mpegurl",
                 "Range" to "bytes=0-99",
+                "If-Range" to "\"old-range\"",
                 "If-Match" to "\"old-match\"",
                 "If-None-Match" to "\"old-none-match\"",
                 "If-Modified-Since" to "Wed, 21 Oct 2015 07:28:00 GMT",
@@ -74,6 +75,7 @@ class CastRelayUpstreamHeadersTest {
         )
 
         assertFalse(playlistHeaders.containsKey("Range"))
+        assertFalse(playlistHeaders.containsKey("If-Range"))
         assertFalse(playlistHeaders.containsKey("If-Match"))
         assertFalse(playlistHeaders.containsKey("If-None-Match"))
         assertFalse(playlistHeaders.containsKey("If-Modified-Since"))
@@ -82,12 +84,24 @@ class CastRelayUpstreamHeadersTest {
         assertEquals("no-cache", playlistHeaders["Pragma"])
 
         val mediaHeaders = CastRelayUpstreamHeaders.build(
-            requestHeaders = mapOf("Range" to "bytes=0-99"),
+            requestHeaders = mapOf(
+                "Range" to "bytes=0-99",
+                "If-Range" to "\"old-range\"",
+                "If-Match" to "\"old-match\"",
+                "If-None-Match" to "\"old-none-match\"",
+                "If-Modified-Since" to "Wed, 21 Oct 2015 07:28:00 GMT",
+                "If-Unmodified-Since" to "Wed, 21 Oct 2015 07:28:00 GMT",
+            ),
             config = disabledConfig(),
-            isPlaylistRequest = false,
+            isMediaObjectRequest = true,
         )
 
-        assertEquals("bytes=0-99", mediaHeaders["Range"])
+        assertFalse(mediaHeaders.containsKey("Range"))
+        assertFalse(mediaHeaders.containsKey("If-Range"))
+        assertFalse(mediaHeaders.containsKey("If-Match"))
+        assertFalse(mediaHeaders.containsKey("If-None-Match"))
+        assertFalse(mediaHeaders.containsKey("If-Modified-Since"))
+        assertFalse(mediaHeaders.containsKey("If-Unmodified-Since"))
     }
 
     private fun disabledConfig() = StreamProxyConfig(

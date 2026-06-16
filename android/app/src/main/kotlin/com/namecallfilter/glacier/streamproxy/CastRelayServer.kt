@@ -185,11 +185,17 @@ class CastRelayServer(
             relayTarget = request.target,
         )
         val playlistRequest = isPlaylistUrl(target.sourceUrl)
+        val mediaObjectRequest = !playlistRequest
+        val inboundRange = requestHeader(request.headers, "Range")
         val requestHeaders = CastRelayUpstreamHeaders.build(
             requestHeaders = request.headers,
             config = currentConfig,
             isPlaylistRequest = playlistRequest,
+            isMediaObjectRequest = mediaObjectRequest,
         )
+        val rangeStripped = mediaObjectRequest &&
+            inboundRange != null &&
+            requestHeader(requestHeaders, "Range") == null
         val upstreamMethod = if (request.method.equals("HEAD", ignoreCase = true)) {
             "HEAD"
         } else {
@@ -205,6 +211,7 @@ class CastRelayServer(
             method = upstreamMethod,
             headers = requestHeaders,
             config = currentConfig,
+            forceProxyVideoWeaverPlaylists = playlistRequest,
         )
         val response = fetcher.fetch(
             request = upstreamRequest,
@@ -231,7 +238,10 @@ class CastRelayServer(
 
         response.use { upstream ->
             val headOnly = request.method.equals("HEAD", ignoreCase = true)
-            val headers = responseHeaders(upstream)
+            val headers = responseHeaders(
+                response = upstream,
+                isMediaObjectRequest = mediaObjectRequest,
+            )
             var mimeType = upstream.mimeType
             var selectedQuality: String? = null
             val playlistResponse = isPlaylistResponse(upstreamUrl, upstream)
@@ -301,17 +311,28 @@ class CastRelayServer(
             ) {
                 headers["Content-Type"] = mimeType
             }
-            upstreamHeader(upstream.headers, "Content-Length")
+            val upstreamContentLength = upstreamHeader(upstream.headers, "Content-Length")
+            upstreamContentLength
                 ?.takeIf(String::isNotBlank)
                 ?.let { contentLength ->
                     headers["Content-Length"] = contentLength
                 }
             headers.putAll(corsHeaders())
+            val statusCode = if (mediaObjectRequest && upstream.statusCode == 206) {
+                200
+            } else {
+                upstream.statusCode
+            }
+            val reasonPhrase = if (mediaObjectRequest && upstream.statusCode == 206) {
+                "OK"
+            } else {
+                upstream.reasonPhrase
+            }
 
             val streamResult = sendStreamingResponse(
                 socket = socket,
-                statusCode = upstream.statusCode,
-                reasonPhrase = upstream.reasonPhrase,
+                statusCode = statusCode,
+                reasonPhrase = reasonPhrase,
                 headers = headers,
                 body = upstream.body,
                 headOnly = headOnly,
@@ -319,23 +340,42 @@ class CastRelayServer(
             log(
                 "cast_relay action=response method=${request.method} " +
                     "path=$path status=${upstream.statusCode} " +
+                    "upstream_status=${upstream.statusCode} " +
+                    "response_status=$statusCode " +
                     "source=${sourceDescription(upstreamUrl)} " +
                     "upstream_connect_ms=${elapsedMs(requestStartedNs, upstreamConnectedNs)} " +
                     "upstream_first_byte_ms=" +
                     "${elapsedMsOrMissing(requestStartedNs, streamResult.firstByteNs)} " +
                     "total_ms=${elapsedMs(requestStartedNs)} " +
+                    "inbound_range=${sanitizeLogValue(inboundRange)} " +
+                    "range_stripped=$rangeStripped " +
+                    "upstream_content_length=${upstreamContentLength.orEmpty()} " +
                     "bytes=${streamResult.bytes} mime=${mimeType.orEmpty()} " +
                     "playlist=false selected_quality=",
             )
         }
     }
 
-    private fun responseHeaders(response: StreamProxyResponse): MutableMap<String, String> {
-        return response.headers
+    private fun responseHeaders(
+        response: StreamProxyResponse,
+        isMediaObjectRequest: Boolean,
+    ): MutableMap<String, String> {
+        val headers = response.headers
             .filterKeys { name ->
-                !hopByHopHeaders.contains(name.lowercase(Locale.US))
+                val normalizedName = name.lowercase(Locale.US)
+                !hopByHopHeaders.contains(normalizedName) &&
+                    (!isMediaObjectRequest || normalizedName != "content-range")
             }
             .toMutableMap()
+
+        if (isMediaObjectRequest) {
+            headers.entries.removeIf { (name, _) ->
+                name.equals("Accept-Ranges", ignoreCase = true)
+            }
+            headers["Accept-Ranges"] = "none"
+        }
+
+        return headers
     }
 
     private fun readRequest(socket: Socket): HttpRequest? {
@@ -545,6 +585,13 @@ class CastRelayServer(
         return headers.entries
             .firstOrNull { (key, _) -> key.equals(name, ignoreCase = true) }
             ?.value
+    }
+
+    private fun requestHeader(headers: Map<String, String>, name: String): String? {
+        return headers.entries
+            .firstOrNull { (key, _) -> key.equals(name, ignoreCase = true) }
+            ?.value
+            ?.takeIf(String::isNotBlank)
     }
 
     private fun decodeBody(bytes: ByteArray, encoding: String?): String {

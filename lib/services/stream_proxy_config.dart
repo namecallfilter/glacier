@@ -6,6 +6,10 @@ class StreamProxyConfig {
   final String currentChannelLogin;
   final List<String> proxyUrls;
   final List<String> whitelistedChannels;
+  final CastMode castMode;
+  final String webRtcGatewayUrl;
+  final String whepUrlOverride;
+  final bool webRtcAutoFallback;
   final bool debugLogging;
 
   const StreamProxyConfig({
@@ -13,6 +17,10 @@ class StreamProxyConfig {
     required this.currentChannelLogin,
     required this.proxyUrls,
     required this.whitelistedChannels,
+    this.castMode = CastMode.stableHls,
+    this.webRtcGatewayUrl = '',
+    this.whepUrlOverride = '',
+    this.webRtcAutoFallback = false,
     this.debugLogging = kDebugMode,
   });
 
@@ -26,6 +34,10 @@ class StreamProxyConfig {
       currentChannelLogin: currentChannelLogin,
       proxyUrls: settingsStore.streamProxyUrls,
       whitelistedChannels: settingsStore.streamProxyWhitelistedChannels,
+      castMode: settingsStore.castMode,
+      webRtcGatewayUrl: settingsStore.webRtcGatewayUrl,
+      whepUrlOverride: settingsStore.whepUrlOverride,
+      webRtcAutoFallback: settingsStore.webRtcAutoFallback,
       debugLogging: debugLogging,
     );
   }
@@ -42,9 +54,35 @@ class StreamProxyConfig {
           .map((channel) => channel.trim().toLowerCase())
           .where((channel) => channel.isNotEmpty)
           .toList(),
+      'castMode': castMode.name,
+      'webRtcGatewayUrl': webRtcGatewayUrl.trim(),
+      'whepUrlOverride': whepUrlOverride.trim(),
+      'webRtcAutoFallback': webRtcAutoFallback,
       'debugLogging': debugLogging,
     };
   }
+}
+
+String? validateOptionalWebRtcUrl(String value) {
+  final trimmed = value.trim();
+  if (trimmed.isEmpty) return null;
+
+  final Uri uri;
+  try {
+    uri = Uri.parse(trimmed);
+  } catch (_) {
+    return 'Enter a valid URL';
+  }
+
+  if (uri.scheme != 'http' && uri.scheme != 'https') {
+    return 'Use an HTTP or HTTPS URL';
+  }
+
+  if (uri.host.isEmpty) {
+    return 'Enter a URL host';
+  }
+
+  return null;
 }
 
 String? validateStreamProxyUrl(String value) {
@@ -93,10 +131,7 @@ String? _extractExplicitPort(String normalizedUrl) {
   }
 
   final authorityStart = schemeSeparatorIndex + 3;
-  final authorityEnd = normalizedUrl.indexOf(
-    RegExp(r'[/#?]'),
-    authorityStart,
-  );
+  final authorityEnd = normalizedUrl.indexOf(RegExp(r'[/#?]'), authorityStart);
   final authority = normalizedUrl.substring(
     authorityStart,
     authorityEnd == -1 ? normalizedUrl.length : authorityEnd,

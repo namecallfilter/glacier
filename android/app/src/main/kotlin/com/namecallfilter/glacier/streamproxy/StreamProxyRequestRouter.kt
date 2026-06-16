@@ -19,6 +19,7 @@ class StreamProxyRequestRouter {
         method: String,
         headers: Map<String, String>,
         config: StreamProxyConfig,
+        forceProxyVideoWeaverPlaylists: Boolean = false,
     ): StreamProxyDecision {
         if (!config.enabled) {
             return StreamProxyDecision(
@@ -76,7 +77,12 @@ class StreamProxyRequestRouter {
 
         return when (requestType) {
             StreamProxyRequestType.USHER -> routeUsher(url, config, flagged)
-            StreamProxyRequestType.VIDEO_WEAVER -> routeVideoWeaver(url, config, flagged)
+            StreamProxyRequestType.VIDEO_WEAVER -> routeVideoWeaver(
+                url = url,
+                config = config,
+                flagged = flagged,
+                forceProxyPlaylists = forceProxyVideoWeaverPlaylists,
+            )
             StreamProxyRequestType.PASSPORT,
             StreamProxyRequestType.TWITCH_WEBPAGE -> StreamProxyDecision(
                 requestType = requestType,
@@ -191,6 +197,7 @@ class StreamProxyRequestRouter {
         url: String,
         config: StreamProxyConfig,
         flagged: Boolean,
+        forceProxyPlaylists: Boolean,
     ): StreamProxyDecision {
         val channel = videoWeaverChannels[url] ?: config.currentChannelLogin.takeIf(String::isNotEmpty)
 
@@ -220,6 +227,15 @@ class StreamProxyRequestRouter {
                 action = StreamProxyAction.SKIP,
                 channel = channel,
                 reason = "whitelisted",
+                flagged = flagged,
+            )
+        }
+
+        if (forceProxyPlaylists) {
+            return StreamProxyDecision(
+                requestType = StreamProxyRequestType.VIDEO_WEAVER,
+                action = StreamProxyAction.PROXY,
+                channel = channel,
                 flagged = flagged,
             )
         }

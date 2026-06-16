@@ -2,13 +2,23 @@ class CastState {
   final bool isCasting;
   final String? receiverName;
   final Duration? latency;
+  final String? statusMessage;
+  final String? castMode;
 
-  const CastState({required this.isCasting, this.receiverName, this.latency});
+  const CastState({
+    required this.isCasting,
+    this.receiverName,
+    this.latency,
+    this.statusMessage,
+    this.castMode,
+  });
 
   const CastState.disconnected()
     : isCasting = false,
       receiverName = null,
-      latency = null;
+      latency = null,
+      statusMessage = null,
+      castMode = null;
 
   double? get latencySeconds {
     final currentLatency = latency;
@@ -26,6 +36,8 @@ class CastState {
     final isCasting = payload['isCasting'] == true;
     final receiverName = payload['receiverName'];
     final latencyMs = payload['latencyMs'];
+    final statusMessage = payload['statusMessage'];
+    final castMode = payload['castMode'];
 
     return CastState(
       isCasting: isCasting,
@@ -34,6 +46,12 @@ class CastState {
           : null,
       latency: latencyMs is num && latencyMs >= 0
           ? Duration(milliseconds: latencyMs.round())
+          : null,
+      statusMessage: statusMessage is String && statusMessage.trim().isNotEmpty
+          ? statusMessage.trim()
+          : null,
+      castMode: castMode is String && castMode.trim().isNotEmpty
+          ? castMode.trim()
           : null,
     );
   }

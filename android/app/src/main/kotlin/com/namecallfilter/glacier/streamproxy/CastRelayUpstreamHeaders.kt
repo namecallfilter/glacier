@@ -7,6 +7,7 @@ object CastRelayUpstreamHeaders {
         requestHeaders: Map<String, String>,
         config: StreamProxyConfig,
         isPlaylistRequest: Boolean = false,
+        isMediaObjectRequest: Boolean = false,
     ): Map<String, String> {
         val headers = linkedMapOf<String, String>()
         val requestHeaderLookup = requestHeaders.entries.associateBy {
@@ -23,6 +24,12 @@ object CastRelayUpstreamHeaders {
             if (
                 isPlaylistRequest &&
                 playlistFreshnessRequestHeaderNames.contains(headerName.lowercase(Locale.US))
+            ) {
+                return@forEach
+            }
+            if (
+                isMediaObjectRequest &&
+                mediaObjectRequestHeaderNames.contains(headerName.lowercase(Locale.US))
             ) {
                 return@forEach
             }
@@ -65,6 +72,7 @@ object CastRelayUpstreamHeaders {
     private val passthroughHeaderNames = listOf(
         "Accept-Language",
         "Range",
+        "If-Range",
         "If-Match",
         "If-None-Match",
         "If-Modified-Since",
@@ -73,6 +81,16 @@ object CastRelayUpstreamHeaders {
 
     private val playlistFreshnessRequestHeaderNames = setOf(
         "range",
+        "if-range",
+        "if-match",
+        "if-none-match",
+        "if-modified-since",
+        "if-unmodified-since",
+    )
+
+    private val mediaObjectRequestHeaderNames = setOf(
+        "range",
+        "if-range",
         "if-match",
         "if-none-match",
         "if-modified-since",

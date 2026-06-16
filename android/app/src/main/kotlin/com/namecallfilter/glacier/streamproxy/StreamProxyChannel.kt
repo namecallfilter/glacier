@@ -142,8 +142,9 @@ object StreamProxyChannel {
                         result.success(null)
                     }
                     "stopCasting" -> {
+                        val reason = stringArgument(call, "reason") ?: "unknown"
                         mainHandler.post {
-                            castController.stopCasting()
+                            castController.stopCasting(reason = reason)
                         }
                         result.success(null)
                     }

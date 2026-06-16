@@ -8,97 +8,106 @@
 	<style>
 		html,
 		body,
-		cast-media-player {
+		#hls-player,
+		#webrtc-video {
 			width: 100%;
 			height: 100%;
 			margin: 0;
 			overflow: hidden;
 			background: #000;
 		}
+
+		#webrtc-video {
+			display: none;
+			object-fit: contain;
+		}
 	</style>
 </head>
 
 <body>
-	<cast-media-player></cast-media-player>
+	<cast-media-player id="hls-player"></cast-media-player>
+	<video id="webrtc-video" autoplay playsinline></video>
 
 	<script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
 	<script>
 		(() => {
 			const MESSAGE_NAMESPACE = 'urn:x-cast:com.namecallfilter.glacier.cast';
 
-			const TARGET_LATENCY_SECONDS = 4.0;
-			const MAX_LATENCY_SECONDS = 8.0;
-			const EMERGENCY_LATENCY_SECONDS = 10.0;
+			const HLS_MODE = 'hls';
+			const WEBRTC_MODE = 'webrtc';
 
+			const TARGET_LATENCY_SECONDS = 20.0;
+			const MAX_LATENCY_SECONDS = 45.0;
+			const EMERGENCY_LATENCY_SECONDS = 75.0;
+
+			const WEBRTC_TARGET_LATENCY_SECONDS = 2.0;
 			const STATUS_INTERVAL_MS = 1000;
-			const LATENCY_CHECK_INTERVAL_MS = 500;
-			const STARTUP_LIVE_SEEK_THRESHOLD_SECONDS = TARGET_LATENCY_SECONDS + 0.5;
-			const MAX_LATENCY_SEEK_COOLDOWN_MS = 8000;
-			const MAX_LATENCY_RELOAD_COOLDOWN_MS = 15000;
-			const HIGH_LATENCY_RELOAD_TICKS = 3;
+			const LATENCY_CHECK_INTERVAL_MS = 5000;
+			const EMERGENCY_SEEK_COOLDOWN_MS = 60000;
 
 			const context = cast.framework.CastReceiverContext.getInstance();
 			const playerManager = context.getPlayerManager();
+			const hlsPlayerElement = document.getElementById('hls-player');
+			const webRtcVideoElement = document.getElementById('webrtc-video');
 
 			const playbackConfig = new cast.framework.PlaybackConfig();
 
-			playbackConfig.autoResumeNumberOfSegments = 0;
-			playbackConfig.enableSmoothLiveRefresh = false;
-			playbackConfig.segmentRequestRetryLimit = 1;
+			playbackConfig.autoResumeNumberOfSegments = 2;
+			playbackConfig.enableSmoothLiveRefresh = true;
+			playbackConfig.segmentRequestRetryLimit = 5;
 
 			playbackConfig.shakaConfig = {
 				streaming: {
-					lowLatencyMode: true,
+					lowLatencyMode: false,
 
-					bufferingGoal: 3,
-					rebufferingGoal: 0.75,
-					bufferBehind: 6,
+					bufferingGoal: 30,
+					rebufferingGoal: 8,
+					bufferBehind: 60,
 
-					updateIntervalSeconds: 0.5,
+					updateIntervalSeconds: 1,
 
-					segmentPrefetchLimit: 2,
-					inaccurateManifestTolerance: 0,
-					startAtSegmentBoundary: false,
+					segmentPrefetchLimit: 0,
+					inaccurateManifestTolerance: 2,
+					startAtSegmentBoundary: true,
 
 					liveSync: {
 						enabled: true,
 						targetLatency: TARGET_LATENCY_SECONDS,
-						targetLatencyTolerance: 0.25,
+						targetLatencyTolerance: 5,
 
-						maxPlaybackRate: 1.1,
-						minPlaybackRate: 0.98,
+						maxPlaybackRate: 1.03,
+						minPlaybackRate: 0.97,
 
-						panicMode: true,
+						panicMode: false,
 						panicThreshold: MAX_LATENCY_SECONDS,
 
 						dynamicTargetLatency: {
 							enabled: true,
 							minLatency: TARGET_LATENCY_SECONDS,
 							maxLatency: MAX_LATENCY_SECONDS,
-							rebufferIncrement: 0.5,
-							stabilityThreshold: 8,
-							maxAttempts: 3,
+							rebufferIncrement: 5,
+							stabilityThreshold: 20,
+							maxAttempts: 6,
 						},
 					},
 
 					retryParameters: {
-						maxAttempts: 2,
-						baseDelay: 100,
-						backoffFactor: 1.2,
-						fuzzFactor: 0.1,
+						maxAttempts: 5,
+						baseDelay: 500,
+						backoffFactor: 1.5,
+						fuzzFactor: 0.2,
 					},
 				},
 
 				manifest: {
 					defaultPresentationDelay: TARGET_LATENCY_SECONDS,
-
-					updatePeriod: 0.2,
+					updatePeriod: 2,
 
 					retryParameters: {
-						maxAttempts: 2,
-						baseDelay: 100,
-						backoffFactor: 1.2,
-						fuzzFactor: 0.1,
+						maxAttempts: 5,
+						baseDelay: 500,
+						backoffFactor: 1.5,
+						fuzzFactor: 0.2,
 					},
 
 					hls: {
@@ -114,30 +123,46 @@
 			const finiteNumber = (value) =>
 				typeof value === 'number' && Number.isFinite(value);
 
-			let pendingStartupLiveSeek = false;
-			let lastMaxLatencySeekAtMs = 0;
-			let lastMaxLatencyReloadAtMs = 0;
-			let emergencyRecoveryActive = false;
-			let emergencyTicksAfterSeek = 0;
-			let lastLoadRequestData = null;
+			let activeMode = HLS_MODE;
+			let lastEmergencySeekAtMs = 0;
+			let webRtcPeerConnection = null;
+			let webRtcRemoteStream = null;
+			let webRtcState = 'idle';
+			let webRtcError = null;
+			let webRtcStartedAtMs = null;
+			let webRtcGatewayHostedOnPhone = false;
 
 			const logReceiverEvent = (action, fields = {}) => {
-				const details = Object.entries({action, ...fields})
+				const details = Object.entries({action, mode: activeMode, ...fields})
 					.map(([key, value]) => `${key}=${value == null ? '' : value}`)
 					.join(' ');
 
 				console.log(`[GlacierCastReceiver] ${details}`);
 			};
 
+			const showHlsPlayer = () => {
+				activeMode = HLS_MODE;
+				if (hlsPlayerElement) hlsPlayerElement.style.display = 'block';
+				if (webRtcVideoElement) webRtcVideoElement.style.display = 'none';
+			};
+
+			const showWebRtcPlayer = () => {
+				activeMode = WEBRTC_MODE;
+				if (hlsPlayerElement) hlsPlayerElement.style.display = 'none';
+				if (webRtcVideoElement) webRtcVideoElement.style.display = 'block';
+			};
+
 			const currentPlaybackRate = () => {
-				if (typeof playerManager.getPlaybackRate === 'function') {
+				if (activeMode === HLS_MODE && typeof playerManager.getPlaybackRate === 'function') {
 					const managerRate = playerManager.getPlaybackRate();
 					if (finiteNumber(managerRate) && managerRate > 0) {
 						return managerRate;
 					}
 				}
 
-				const mediaElement = document.querySelector('video, audio');
+				const mediaElement = activeMode === WEBRTC_MODE
+					? webRtcVideoElement
+					: document.querySelector('video, audio');
 				if (mediaElement && finiteNumber(mediaElement.playbackRate)) {
 					return mediaElement.playbackRate;
 				}
@@ -145,7 +170,7 @@
 				return 1.0;
 			};
 
-			const liveStatus = () => {
+			const hlsLiveStatus = () => {
 				const range = playerManager.getLiveSeekableRange();
 				if (!range || !finiteNumber(range.end)) return null;
 
@@ -166,11 +191,12 @@
 				}
 			};
 
-			const sendStatus = (extra = {}) => {
-				const status = liveStatus();
+			const sendHlsStatus = (extra = {}) => {
+				const status = hlsLiveStatus();
 
 				sendCustomMessageToAll({
 					type: 'status',
+					mode: HLS_MODE,
 					latencyMs: status == null ? null : Math.round(status.latency * 1000),
 					playerState: playerManager.getPlayerState(),
 					currentTimeSec: status == null ? null : status.currentTime,
@@ -184,8 +210,41 @@
 				});
 			};
 
+			const webRtcLatencyMs = () => {
+				if (!webRtcStartedAtMs || webRtcState !== 'playing') return null;
+				// This is only a coarse receiver-side estimate. The around-2s target is
+				// realistic only when the MediaMTX gateway reads the same low-latency
+				// source or parts the phone uses; full-segment HLS converted to WebRTC
+				// should not be expected to stay at or below 2 seconds.
+				return Math.round(WEBRTC_TARGET_LATENCY_SECONDS * 1000);
+			};
+
+			const sendWebRtcStatus = (extra = {}) => {
+				sendCustomMessageToAll({
+					type: 'status',
+					mode: WEBRTC_MODE,
+					latencyMs: webRtcLatencyMs(),
+					playerState: webRtcState,
+					targetLatencySec: WEBRTC_TARGET_LATENCY_SECONDS,
+					playbackRate: currentPlaybackRate(),
+					latencyReference: 'webrtcGatewayEstimate',
+					gatewayHostedOnPhone: webRtcGatewayHostedOnPhone,
+					error: webRtcError,
+					...extra,
+				});
+			};
+
+			const sendStatus = () => {
+				if (activeMode === WEBRTC_MODE) {
+					sendWebRtcStatus();
+					return;
+				}
+
+				sendHlsStatus();
+			};
+
 			const seekToLiveLatency = (latencySeconds) => {
-				const status = liveStatus();
+				const status = hlsLiveStatus();
 				if (!status) return false;
 
 				const start = status.rangeStart == null ? 0 : status.rangeStart;
@@ -202,80 +261,35 @@
 				return true;
 			};
 
-			const seekToTargetLive = () => seekToLiveLatency(TARGET_LATENCY_SECONDS);
-
 			const jumpToLive = () => {
-				const ok = seekToTargetLive();
-				sendStatus({correction: ok ? 'manualJumpToLive' : 'manualJumpFailed'});
+				if (activeMode !== HLS_MODE) {
+					sendWebRtcStatus({correction: 'manualJumpUnavailable'});
+					return false;
+				}
+
+				const ok = seekToLiveLatency(TARGET_LATENCY_SECONDS);
+				sendHlsStatus({correction: ok ? 'manualJumpToLive' : 'manualJumpFailed'});
 				return ok;
 			};
 
-			const reloadCurrentMedia = () => {
-				if (!lastLoadRequestData || typeof playerManager.load !== 'function') {
-					return false;
-				}
+			const enforceHlsLatency = () => {
+				if (activeMode !== HLS_MODE) return;
 
-				lastLoadRequestData.autoplay = true;
-				pendingStartupLiveSeek = true;
+				const state = playerManager.getPlayerState();
+				const active = state === 'PLAYING' || state === 'BUFFERING';
 
-				try {
-					const loadResult = playerManager.load(lastLoadRequestData);
-					if (loadResult && typeof loadResult.catch === 'function') {
-						loadResult.catch((error) => {
-							logReceiverEvent('reload_failed', {
-								reason: error && error.name ? error.name : 'unknown',
-							});
-						});
-					}
-					return true;
-				} catch (error) {
-					logReceiverEvent('reload_failed', {
-						reason: error && error.name ? error.name : 'unknown',
-					});
-					return false;
-				}
-			};
+				if (!active) return;
 
-			const tryStartupLiveSeek = () => {
-				if (!pendingStartupLiveSeek) return false;
+				const status = hlsLiveStatus();
+				if (!status) return;
 
-				pendingStartupLiveSeek = false;
+				if (status.latency <= MAX_LATENCY_SECONDS) return;
 
-				const status = liveStatus();
-				if (!status) {
-					sendStatus({correction: 'startupJumpUnavailable'});
-					return false;
-				}
-
-				if (status.latency <= STARTUP_LIVE_SEEK_THRESHOLD_SECONDS) return false;
-
-				const ok = seekToTargetLive();
-				if (ok && status.latency > EMERGENCY_LATENCY_SECONDS) {
-					lastMaxLatencySeekAtMs = Date.now();
-					emergencyRecoveryActive = true;
-					emergencyTicksAfterSeek = 0;
-				}
-				sendStatus({
-					correction: ok ? 'startupJumpToLive' : 'startupJumpFailed',
-					latencyBeforeCorrectionMs: Math.round(status.latency * 1000),
-				});
-
-				return ok;
-			};
-
-			const enforceMaxLatencySeek = (status) => {
-				if (status.latency <= MAX_LATENCY_SECONDS) {
-					emergencyRecoveryActive = false;
-					emergencyTicksAfterSeek = 0;
-					return;
-				}
-
-				const now = Date.now();
 				const latencyBeforeCorrectionMs = Math.round(status.latency * 1000);
 				const emergency = status.latency > EMERGENCY_LATENCY_SECONDS;
 
 				logReceiverEvent('max_latency', {
-					state: playerManager.getPlayerState(),
+					state,
 					latency_ms: latencyBeforeCorrectionMs,
 					max_latency_ms: Math.round(MAX_LATENCY_SECONDS * 1000),
 					target_latency_ms: Math.round(TARGET_LATENCY_SECONDS * 1000),
@@ -285,82 +299,222 @@
 					emergency,
 				});
 
-				if (emergency && emergencyRecoveryActive) {
-					emergencyTicksAfterSeek += 1;
-
-					if (emergencyTicksAfterSeek >= HIGH_LATENCY_RELOAD_TICKS) {
-						const reloadCooldownActive =
-							lastMaxLatencyReloadAtMs > 0 &&
-							now - lastMaxLatencyReloadAtMs < MAX_LATENCY_RELOAD_COOLDOWN_MS;
-
-						if (!reloadCooldownActive) {
-							lastMaxLatencyReloadAtMs = now;
-							emergencyRecoveryActive = false;
-							emergencyTicksAfterSeek = 0;
-							const ok = reloadCurrentMedia();
-
-							sendStatus({
-								correction: ok ? 'maxLatencyReload' : 'maxLatencyReloadFailed',
-								latencyBeforeCorrectionMs,
-							});
-							return;
-						}
-					}
-
-					sendStatus({
-						correction: 'maxLatencyObserved',
+				if (!emergency) {
+					sendHlsStatus({
+						correction: 'latencyObserved',
 						latencyBeforeCorrectionMs,
 					});
 					return;
 				}
 
-				const seekCooldownActive =
-					lastMaxLatencySeekAtMs > 0 &&
-					now - lastMaxLatencySeekAtMs < MAX_LATENCY_SEEK_COOLDOWN_MS;
+				const now = Date.now();
+				const cooldownActive =
+					lastEmergencySeekAtMs > 0 &&
+					now - lastEmergencySeekAtMs < EMERGENCY_SEEK_COOLDOWN_MS;
 
-				if (!emergency && seekCooldownActive) {
-					sendStatus({
-						correction: 'maxLatencyObserved',
+				if (cooldownActive) {
+					sendHlsStatus({
+						correction: 'emergencyLatencyObserved',
 						latencyBeforeCorrectionMs,
 					});
 					return;
 				}
 
-				lastMaxLatencySeekAtMs = now;
-				emergencyRecoveryActive = emergency;
-				emergencyTicksAfterSeek = 0;
-				const ok = seekToTargetLive();
+				lastEmergencySeekAtMs = now;
+				const ok = seekToLiveLatency(TARGET_LATENCY_SECONDS);
 
-				sendStatus({
-					correction: ok ? 'maxLatencyJumpToLive' : 'maxLatencyJumpFailed',
-					latencyBeforeCorrectionMs: Math.round(status.latency * 1000),
+				sendHlsStatus({
+					correction: ok ? 'emergencyJumpToLive' : 'emergencyJumpFailed',
+					latencyBeforeCorrectionMs,
 				});
 			};
 
-			const enforceMaxLatency = () => {
-				const state = playerManager.getPlayerState();
-				const active = state === 'PLAYING' || state === 'BUFFERING';
+			const stopWebRtc = () => {
+				if (webRtcPeerConnection) {
+					try {
+						webRtcPeerConnection.close();
+					} catch (_) {}
+				}
+				webRtcPeerConnection = null;
+				webRtcRemoteStream = null;
+				webRtcState = 'idle';
+				webRtcError = null;
+				webRtcStartedAtMs = null;
+				webRtcGatewayHostedOnPhone = false;
+				if (webRtcVideoElement) {
+					webRtcVideoElement.srcObject = null;
+				}
+			};
 
-				if (!active) return;
+			const waitForIceGatheringComplete = (peerConnection) => {
+				if (
+					peerConnection.iceGatheringState === 'complete' ||
+					typeof peerConnection.addEventListener !== 'function'
+				) {
+					return Promise.resolve();
+				}
 
-				if (tryStartupLiveSeek()) return;
+				return new Promise((resolve) => {
+					const timeoutId = setTimeout(resolve, 2000);
+					const listener = () => {
+						if (peerConnection.iceGatheringState === 'complete') {
+							clearTimeout(timeoutId);
+							peerConnection.removeEventListener('icegatheringstatechange', listener);
+							resolve();
+						}
+					};
+					peerConnection.addEventListener('icegatheringstatechange', listener);
+				});
+			};
 
-				const status = liveStatus();
-				if (!status) return;
+			const webRtcSetupErrorMessage = (error) => {
+				const message = error && error.message
+					? error.message
+					: 'WebRTC setup failed';
 
-				enforceMaxLatencySeek(status);
+				if (
+					webRtcGatewayHostedOnPhone &&
+					/(failed to fetch|networkerror|load failed)/i.test(message)
+				) {
+					return 'Phone WebRTC gateway is unreachable. Keep this phone and Chromecast on the same LAN and make sure Low Latency casting is still active.';
+				}
+
+				return message;
+			};
+
+			const whepResponseErrorDetail = (body) => {
+				const trimmedBody = typeof body === 'string' ? body.trim() : '';
+				if (!trimmedBody) return '';
+
+				try {
+					const parsed = JSON.parse(trimmedBody);
+					if (parsed && typeof parsed.error === 'string') {
+						return parsed.error.trim();
+					}
+					if (parsed && typeof parsed.message === 'string') {
+						return parsed.message.trim();
+					}
+				} catch (_error) {
+					// MediaMTX usually returns JSON, but keep plain text diagnostics too.
+				}
+
+				return trimmedBody.slice(0, 240);
+			};
+
+			const startWebRtc = async (message) => {
+				stopWebRtc();
+				showWebRtcPlayer();
+
+				const whepUrl = typeof message.whepUrl === 'string'
+					? message.whepUrl.trim()
+					: '';
+
+				webRtcState = 'connecting';
+				webRtcError = null;
+				webRtcGatewayHostedOnPhone = message.gatewayHostedOnPhone === true;
+				sendWebRtcStatus({
+					channelLogin: message.channelLogin || null,
+					title: message.title || null,
+				});
+
+				try {
+					if (!whepUrl) {
+						throw new Error('Missing WHEP URL');
+					}
+					if (typeof RTCPeerConnection !== 'function') {
+						throw new Error('RTCPeerConnection is not available on this receiver');
+					}
+					if (!webRtcVideoElement) {
+						throw new Error('WebRTC video element is unavailable');
+					}
+
+					const peerConnection = new RTCPeerConnection();
+					webRtcPeerConnection = peerConnection;
+					webRtcRemoteStream = new MediaStream();
+					webRtcVideoElement.srcObject = webRtcRemoteStream;
+
+					peerConnection.addTransceiver('video', {direction: 'recvonly'});
+					peerConnection.addTransceiver('audio', {direction: 'recvonly'});
+
+					peerConnection.ontrack = (event) => {
+						if (!webRtcRemoteStream) return;
+						webRtcRemoteStream.addTrack(event.track);
+						webRtcVideoElement.srcObject = webRtcRemoteStream;
+						webRtcVideoElement.play().catch((error) => {
+							logReceiverEvent('webrtc_video_play_failed', {
+								reason: error && error.name ? error.name : 'unknown',
+							});
+						});
+					};
+
+					peerConnection.onconnectionstatechange = () => {
+						const state = peerConnection.connectionState;
+						if (state === 'connected') {
+							webRtcState = 'playing';
+							webRtcStartedAtMs = Date.now();
+						} else if (state === 'failed' || state === 'disconnected') {
+							webRtcState = state === 'failed' ? 'failed' : 'stalled';
+							webRtcError = state === 'failed'
+								? 'WebRTC connection failed'
+								: 'WebRTC connection stalled';
+						}
+						sendWebRtcStatus();
+					};
+
+					const offer = await peerConnection.createOffer();
+					await peerConnection.setLocalDescription(offer);
+					await waitForIceGatheringComplete(peerConnection);
+
+					const localDescription = peerConnection.localDescription || offer;
+					const response = await fetch(whepUrl, {
+						method: 'POST',
+						headers: {
+							'Content-Type': 'application/sdp',
+							'Accept': 'application/sdp',
+						},
+						body: localDescription.sdp,
+					});
+
+					const responseBody = await response.text().catch(() => '');
+					if (!response.ok) {
+						const detail = whepResponseErrorDetail(responseBody);
+						throw new Error(
+							`WHEP request failed with status ${response.status}` +
+								(detail ? `: ${detail}` : ''),
+						);
+					}
+
+					await peerConnection.setRemoteDescription(
+						new RTCSessionDescription({
+							type: 'answer',
+							sdp: responseBody,
+						}),
+					);
+
+					webRtcState = 'playing';
+					webRtcStartedAtMs = Date.now();
+					await webRtcVideoElement.play().catch(() => {});
+					sendWebRtcStatus();
+					logReceiverEvent('webrtc_started', {
+						whep: true,
+						gateway_hosted_on_phone: webRtcGatewayHostedOnPhone,
+					});
+				} catch (error) {
+					webRtcState = 'failed';
+					webRtcError = webRtcSetupErrorMessage(error);
+					logReceiverEvent('webrtc_failed', {reason: webRtcError});
+					sendWebRtcStatus({error: webRtcError});
+				}
 			};
 
 			playerManager.setMessageInterceptor(
 				cast.framework.messages.MessageType.LOAD,
 				(loadRequestData) => {
-					const media = loadRequestData.media;
+					stopWebRtc();
+					showHlsPlayer();
+					lastEmergencySeekAtMs = 0;
 
-					pendingStartupLiveSeek = true;
-					lastMaxLatencySeekAtMs = 0;
-					lastMaxLatencyReloadAtMs = 0;
-					emergencyRecoveryActive = false;
-					emergencyTicksAfterSeek = 0;
+					const media = loadRequestData.media;
 
 					if (media) {
 						media.entity = media.entity || media.contentId;
@@ -370,7 +524,7 @@
 					}
 
 					loadRequestData.autoplay = true;
-					lastLoadRequestData = loadRequestData;
+					logReceiverEvent('hls_load');
 					return loadRequestData;
 				},
 			);
@@ -394,12 +548,18 @@
 					context.sendCustomMessage(MESSAGE_NAMESPACE, event.senderId, {
 						type: 'jumpToLiveResult',
 						ok,
+						mode: activeMode,
 					});
+					return;
+				}
+
+				if (message.type === 'startWebRtc') {
+					return startWebRtc(message);
 				}
 			});
 
 			setInterval(sendStatus, STATUS_INTERVAL_MS);
-			setInterval(enforceMaxLatency, LATENCY_CHECK_INTERVAL_MS);
+			setInterval(enforceHlsLatency, LATENCY_CHECK_INTERVAL_MS);
 
 			const receiverOptions = new cast.framework.CastReceiverOptions();
 			receiverOptions.disableIdleTimeout = true;
@@ -408,6 +568,7 @@
 
 			receiverOptions.useShakaForHls = true;
 
+			showHlsPlayer();
 			context.start(receiverOptions);
 		})();
 	</script>

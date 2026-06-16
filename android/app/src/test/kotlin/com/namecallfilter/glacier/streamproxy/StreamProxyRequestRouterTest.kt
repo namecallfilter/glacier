@@ -50,6 +50,53 @@ class StreamProxyRequestRouterTest {
         assertNull(router.latestUsherManifestUrl("other_streamer"))
     }
 
+    @Test
+    fun optimizesRepeatedVideoWeaverPlaylistProxyingByDefault() {
+        val router = StreamProxyRequestRouter()
+        val playlistUrl = "https://eus21.playlist.ttvnw.net/v1/playlist/live.m3u8"
+
+        val firstDecision = router.route(
+            url = playlistUrl,
+            method = "GET",
+            headers = mapOf("Accept" to "application/vnd.apple.mpegurl,TTV-LOL-PRO"),
+            config = enabledConfig(),
+        )
+        val secondDecision = router.route(
+            url = playlistUrl,
+            method = "GET",
+            headers = mapOf("Accept" to "application/vnd.apple.mpegurl,TTV-LOL-PRO"),
+            config = enabledConfig(),
+        )
+
+        assertEquals(StreamProxyAction.PROXY, firstDecision.action)
+        assertEquals(StreamProxyAction.SKIP, secondDecision.action)
+        assertEquals("optimized_already_proxied", secondDecision.reason)
+    }
+
+    @Test
+    fun canForceRepeatedVideoWeaverPlaylistProxyingForCastRelay() {
+        val router = StreamProxyRequestRouter()
+        val playlistUrl = "https://eus21.playlist.ttvnw.net/v1/playlist/live.m3u8"
+
+        val firstDecision = router.route(
+            url = playlistUrl,
+            method = "GET",
+            headers = mapOf("Accept" to "application/vnd.apple.mpegurl,TTV-LOL-PRO"),
+            config = enabledConfig(),
+            forceProxyVideoWeaverPlaylists = true,
+        )
+        val secondDecision = router.route(
+            url = playlistUrl,
+            method = "GET",
+            headers = mapOf("Accept" to "application/vnd.apple.mpegurl,TTV-LOL-PRO"),
+            config = enabledConfig(),
+            forceProxyVideoWeaverPlaylists = true,
+        )
+
+        assertEquals(StreamProxyAction.PROXY, firstDecision.action)
+        assertEquals(StreamProxyAction.PROXY, secondDecision.action)
+    }
+
     private fun enabledConfig() = StreamProxyConfig(
         mode = StreamProxyMode.TTV_LOL_PRO,
         currentChannelLogin = "streamer",

@@ -229,6 +229,7 @@ class _ConnectedCastControls extends StatelessWidget {
   Widget build(BuildContext context) {
     final receiverName = castState.receiverName ?? 'Cast device';
     final latency = castState.formattedLatency;
+    final statusMessage = castState.statusMessage;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(0, 0, 0, 8),
@@ -239,13 +240,17 @@ class _ConnectedCastControls extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.cast_connected_rounded),
             title: Text(receiverName),
-            subtitle: latency == null
+            subtitle: statusMessage != null
+                ? Text(statusMessage)
+                : latency == null
                 ? const Text('Casting')
                 : Text('Casting - $latency latency'),
             trailing: TextButton(
               onPressed: () async {
                 Navigator.of(context).pop();
-                await StreamProxyBridge.stopCasting();
+                await StreamProxyBridge.stopCasting(
+                  reason: 'cast_controls_disconnect',
+                );
               },
               child: const Text('Disconnect'),
             ),

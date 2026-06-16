@@ -66,6 +66,10 @@ abstract class _SettingsStoreBase with Store {
   static const defaultDefaultToHighestQuality = false;
   static const defaultUseTextureRendering = true;
   static const defaultKeepScreenAwake = true;
+  static const defaultCastMode = CastMode.stableHls;
+  static const defaultWebRtcGatewayUrl = '';
+  static const defaultWhepUrlOverride = '';
+  static const defaultWebRtcAutoFallback = false;
   static const defaultStreamProxyMode = StreamProxyMode.off;
   static const defaultStreamProxyUrls = <String>[];
   static const defaultStreamProxyWhitelistedChannels = <String>[];
@@ -91,6 +95,22 @@ abstract class _SettingsStoreBase with Store {
   @JsonKey(defaultValue: defaultKeepScreenAwake)
   @observable
   var keepScreenAwake = defaultKeepScreenAwake;
+
+  @JsonKey(defaultValue: defaultCastMode, unknownEnumValue: CastMode.stableHls)
+  @observable
+  var castMode = defaultCastMode;
+
+  @JsonKey(defaultValue: defaultWebRtcGatewayUrl)
+  @observable
+  var webRtcGatewayUrl = defaultWebRtcGatewayUrl;
+
+  @JsonKey(defaultValue: defaultWhepUrlOverride)
+  @observable
+  var whepUrlOverride = defaultWhepUrlOverride;
+
+  @JsonKey(defaultValue: defaultWebRtcAutoFallback)
+  @observable
+  var webRtcAutoFallback = defaultWebRtcAutoFallback;
 
   @JsonKey(
     defaultValue: defaultStreamProxyMode,
@@ -127,6 +147,10 @@ abstract class _SettingsStoreBase with Store {
     defaultToHighestQuality = defaultDefaultToHighestQuality;
     useTextureRendering = defaultUseTextureRendering;
     keepScreenAwake = defaultKeepScreenAwake;
+    castMode = defaultCastMode;
+    webRtcGatewayUrl = defaultWebRtcGatewayUrl;
+    whepUrlOverride = defaultWhepUrlOverride;
+    webRtcAutoFallback = defaultWebRtcAutoFallback;
     streamProxyMode = defaultStreamProxyMode;
     streamProxyUrls = defaultStreamProxyUrls;
     streamProxyWhitelistedChannels = defaultStreamProxyWhitelistedChannels;
@@ -441,3 +465,7 @@ enum LandscapeCutoutType { none, left, right, both }
 const streamProxyModeNames = ['Off', 'On'];
 
 enum StreamProxyMode { off, ttvLolPro }
+
+const castModeNames = ['Stable HLS', 'Low Latency'];
+
+enum CastMode { stableHls, lowLatency }

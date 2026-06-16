@@ -1,6 +1,8 @@
 package com.namecallfilter.glacier.cast
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.mediarouter.media.MediaRouteSelector
 import androidx.mediarouter.media.MediaRouter
@@ -12,8 +14,10 @@ import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
 import com.namecallfilter.glacier.streamproxy.CastRelayServer
+import com.namecallfilter.glacier.streamproxy.CastMode
 import com.namecallfilter.glacier.streamproxy.StreamProxyConfig
 import com.namecallfilter.glacier.streamproxy.StreamProxySessionRegistry
+import org.json.JSONObject
 
 class GlacierCastController(
     context: Context,
@@ -34,6 +38,7 @@ class GlacierCastController(
         .addControlCategory(CastMediaControlIntent.categoryForCast(receiverApplicationId))
         .build()
     private val routeCallback = CastRouteCallback()
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     @Volatile
     private var castContext: CastContext? = null
@@ -46,6 +51,18 @@ class GlacierCastController(
 
     @Volatile
     private var receiverLatencyMs: Long? = null
+
+    @Volatile
+    private var receiverStatusMessage: String? = null
+
+    @Volatile
+    private var activeCastMode: CastMode = CastMode.STABLE_HLS
+
+    @Volatile
+    private var phoneWebRtcGatewayActive = false
+
+    @Volatile
+    private var phoneWebRtcGatewayRequestPath: String? = null
 
     @Volatile
     private var routeDiscoveryActive = false
@@ -165,12 +182,16 @@ class GlacierCastController(
         }
     }
 
-    fun stopCasting() {
+    fun stopCasting(reason: String = "unknown") {
+        log("cast action=stop_requested reason=$reason mode=${castModeLogName(activeCastMode)}")
         pendingLoad = false
         receiverLatencyMs = null
+        receiverStatusMessage = null
+        activeCastMode = CastMode.STABLE_HLS
         connectingRouteId = null
         connectingRouteName = null
         castContext?.sessionManager?.endCurrentSession(true)
+        stopPhoneWebRtcGateway()
         relayServer.close()
         stopKeepAlive()
         emitDisconnected()
@@ -179,13 +200,24 @@ class GlacierCastController(
 
     private fun loadCurrent() {
         val context = streamContext ?: return
+        updateRelay(context)
+
+        when (context.config.castMode) {
+            CastMode.STABLE_HLS -> loadStableHls(context)
+            CastMode.LOW_LATENCY -> startWebRtc(context)
+        }
+    }
+
+    private fun loadStableHls(context: CastStreamContext) {
+        activeCastMode = CastMode.STABLE_HLS
+        receiverStatusMessage = null
+        stopPhoneWebRtcGateway()
+
         val router = StreamProxySessionRegistry.routerFor(context.webViewIdentifier)
         if (router == null) {
             log("cast action=load_failed reason=missing_router")
             return
         }
-
-        updateRelay(context)
 
         val manifestUrl = router.latestUsherManifestUrl(context.channelLogin)
         if (manifestUrl == null) {
@@ -227,7 +259,7 @@ class GlacierCastController(
             val status = result.status
             Log.d(
                 LOG_TAG,
-                "cast action=load_result success=${status.isSuccess} " +
+                "cast action=load_result mode=stableHls success=${status.isSuccess} " +
                     "status=${status.statusCode} " +
                     "message=${status.statusMessage ?: ""} " +
                     "relay=$relayUrl",
@@ -235,7 +267,238 @@ class GlacierCastController(
         }
         pendingLoad = false
         emitState(currentSession())
-        log("cast action=load relay=$relayUrl quality=${context.quality}")
+        log(
+            "cast action=load mode=stableHls relay=$relayUrl " +
+                "quality=${context.quality}",
+        )
+    }
+
+    private fun startWebRtc(context: CastStreamContext) {
+        activeCastMode = CastMode.LOW_LATENCY
+        receiverLatencyMs = null
+        receiverStatusMessage = null
+
+        val session = currentSession()
+        if (session?.isConnected != true) {
+            log("cast action=webrtc_start_failed reason=missing_session")
+            return
+        }
+
+        val webRtcTarget = webRtcTargetFor(context, session)
+            ?: return
+        sendWebRtcStartMessage(session, context, webRtcTarget)
+    }
+
+    private fun sendWebRtcStartMessage(
+        session: CastSession,
+        context: CastStreamContext,
+        webRtcTarget: WebRtcTarget,
+    ) {
+        val config = context.config
+        val message = JSONObject().apply {
+            put("type", "startWebRtc")
+            put("mode", "webrtc")
+            put("channelLogin", webRtcTarget.channelLogin)
+            put("title", context.title)
+            context.subtitle
+                ?.takeIf(String::isNotBlank)
+                ?.let { subtitle -> put("subtitle", subtitle) }
+            put("whepUrl", webRtcTarget.whepUrl)
+            put("gatewayHostedOnPhone", webRtcTarget.gatewayHostedOnPhone)
+            if (config.webRtcGatewayUrl.isNotBlank()) {
+                put("gatewayUrl", config.webRtcGatewayUrl)
+            }
+        }.toString()
+
+        session.sendMessage(CAST_NAMESPACE, message).setResultCallback { result ->
+            val status = result.status
+            if (!status.isSuccess) {
+                receiverStatusMessage = "Unable to start WebRTC cast."
+                emitState(session)
+            }
+            Log.d(
+                LOG_TAG,
+                "cast action=webrtc_start_result mode=lowLatency " +
+                    "success=${status.isSuccess} status=${status.statusCode} " +
+                    "message=${status.statusMessage ?: ""} " +
+                    "gateway_hosted_on_phone=${webRtcTarget.gatewayHostedOnPhone} " +
+                    "whep=${webRtcTarget.whepUrl.isNotBlank()}",
+            )
+        }
+        pendingLoad = false
+        emitState(session)
+        log(
+            "cast action=load mode=lowLatency channel=${context.channelLogin} " +
+                "gateway_hosted_on_phone=${webRtcTarget.gatewayHostedOnPhone} " +
+                "external_gateway=${config.webRtcGatewayUrl.isNotBlank()} " +
+                "whep=${webRtcTarget.whepUrl.isNotBlank()}",
+        )
+    }
+
+    private fun webRtcTargetFor(
+        context: CastStreamContext,
+        session: CastSession,
+    ): WebRtcTarget? {
+        val config = context.config
+        val externalWhepUrl = config.externalWhepUrl
+        if (externalWhepUrl.isNotBlank()) {
+            stopPhoneWebRtcGateway()
+            return WebRtcTarget(
+                channelLogin = PhoneWebRtcGatewaySession.normalizeChannelLogin(context.channelLogin),
+                whepUrl = externalWhepUrl,
+                gatewayHostedOnPhone = false,
+            )
+        }
+
+        val router = StreamProxySessionRegistry.routerFor(context.webViewIdentifier)
+        if (router == null) {
+            receiverStatusMessage = "Low Latency cast needs an active stream source."
+            emitState(currentSession())
+            log("cast action=webrtc_start_failed reason=missing_router")
+            return null
+        }
+
+        val manifestUrl = router.latestUsherManifestUrl(context.channelLogin)
+        if (manifestUrl == null) {
+            receiverStatusMessage = "Low Latency cast needs an active stream source."
+            emitState(currentSession())
+            log("cast action=webrtc_start_failed reason=missing_manifest channel=${context.channelLogin}")
+            return null
+        }
+
+        val relayUrl = relayServer.relayUrlFor(
+            sourceUrl = manifestUrl,
+            selectedQuality = context.quality,
+        )
+        val lanAddress = PhoneWebRtcGatewaySession.discoverLanIpv4Address()
+        if (lanAddress == null) {
+            receiverStatusMessage = "Low Latency cast needs a LAN IPv4 address."
+            emitState(currentSession())
+            log("cast action=webrtc_start_failed reason=missing_lan_ipv4")
+            return null
+        }
+
+        val gatewaySession = runCatching {
+            val gatewayPort = PhoneWebRtcGatewaySession.choosePort()
+            val icePort = PhoneWebRtcGatewaySession.chooseIcePort(
+                unavailablePorts = setOf(gatewayPort),
+            )
+            PhoneWebRtcGatewaySession.create(
+                channelLogin = context.channelLogin,
+                title = context.title,
+                sourceUrl = relayUrl,
+                lanAddress = lanAddress,
+                port = gatewayPort,
+                icePort = icePort,
+            )
+        }.onFailure { error ->
+            receiverStatusMessage = "Unable to prepare Low Latency gateway."
+            emitState(currentSession())
+            log(
+                "cast action=webrtc_start_failed reason=${error.javaClass.simpleName} " +
+                    "message=${error.message}",
+            )
+        }.getOrNull() ?: return null
+
+        startPhoneHostedWebRtcGateway(
+            context = context,
+            session = session,
+            gatewaySession = gatewaySession,
+        )
+        return null
+    }
+
+    private fun startPhoneHostedWebRtcGateway(
+        context: CastStreamContext,
+        session: CastSession,
+        gatewaySession: PhoneWebRtcGatewaySession,
+    ) {
+        phoneWebRtcGatewayRequestPath = gatewaySession.channelPath
+        receiverStatusMessage = "Starting phone WebRTC gateway."
+        emitState(session)
+
+        runCatching {
+            PhoneWebRtcGatewayService.start(applicationContext, gatewaySession) { result ->
+                mainHandler.post {
+                    handlePhoneHostedGatewayStartResult(
+                        context = context,
+                        gatewaySession = gatewaySession,
+                        result = result,
+                    )
+                }
+            }
+        }.onFailure { error ->
+            val gatewayAvailability = (error as? PhoneWebRtcGatewayUnavailableException)
+                ?.availability
+            receiverStatusMessage = gatewayAvailability?.userMessage
+                ?: "Unable to start phone WebRTC gateway."
+            phoneWebRtcGatewayActive = false
+            phoneWebRtcGatewayRequestPath = null
+            pendingLoad = false
+            emitState(currentSession())
+            log(
+                "cast action=webrtc_start_failed " +
+                    "reason=${gatewayAvailability?.reason ?: error.javaClass.simpleName} " +
+                    "auto_fallback=${context.config.webRtcAutoFallback} " +
+                    "message=${error.message} " +
+                    "diagnostic=${gatewayAvailability?.diagnosticMessage ?: ""}",
+            )
+            if (context.config.webRtcAutoFallback) {
+                loadStableHls(context)
+            }
+        }
+    }
+
+    private fun handlePhoneHostedGatewayStartResult(
+        context: CastStreamContext,
+        gatewaySession: PhoneWebRtcGatewaySession,
+        result: PhoneWebRtcGatewayStartResult,
+    ) {
+        if (phoneWebRtcGatewayRequestPath != gatewaySession.channelPath) {
+            log(
+                "cast action=webrtc_start_ignored reason=stale_gateway " +
+                    "channel=${gatewaySession.channelPath}",
+            )
+            return
+        }
+
+        val session = currentSession()
+        if (session?.isConnected != true) {
+            stopPhoneWebRtcGateway()
+            log("cast action=webrtc_start_ignored reason=missing_session_after_gateway_start")
+            return
+        }
+
+        if (!result.success) {
+            receiverStatusMessage = result.userMessage.ifBlank {
+                "Unable to start phone WebRTC gateway."
+            }
+            phoneWebRtcGatewayActive = false
+            phoneWebRtcGatewayRequestPath = null
+            pendingLoad = false
+            emitState(session)
+            log(
+                "cast action=webrtc_start_failed reason=gateway_not_ready " +
+                    "auto_fallback=${context.config.webRtcAutoFallback} " +
+                    "diagnostic=${result.diagnosticMessage}",
+            )
+            if (context.config.webRtcAutoFallback) {
+                loadStableHls(context)
+            }
+            return
+        }
+
+        phoneWebRtcGatewayActive = true
+        receiverStatusMessage = null
+        sendWebRtcStartMessage(
+            session = session,
+            context = context,
+            webRtcTarget = WebRtcTarget(
+                channelLogin = gatewaySession.channelPath,
+                whepUrl = gatewaySession.whepUrl,
+                gatewayHostedOnPhone = true,
+            ),
+        )
     }
 
     private fun updateRelay(context: CastStreamContext) {
@@ -269,6 +532,18 @@ class GlacierCastController(
         }
     }
 
+    private fun stopPhoneWebRtcGateway() {
+        if (!phoneWebRtcGatewayActive && phoneWebRtcGatewayRequestPath == null) return
+
+        phoneWebRtcGatewayActive = false
+        phoneWebRtcGatewayRequestPath = null
+        runCatching {
+            PhoneWebRtcGatewayService.stop(applicationContext)
+        }.onFailure { error ->
+            log("phone_webrtc_gateway action=stop_failed reason=${error.javaClass.simpleName}")
+        }
+    }
+
     private fun currentSession(): CastSession? {
         return castContext?.sessionManager?.currentCastSession
     }
@@ -279,7 +554,16 @@ class GlacierCastController(
                 val status = CastReceiverMessageParser.parse(message)
                     ?: return@setMessageReceivedCallbacks
 
+                if (!status.appliesTo(activeCastMode)) {
+                    logReceiverStatus(status)
+                    return@setMessageReceivedCallbacks
+                }
+
                 receiverLatencyMs = status.latencyMs ?: receiverLatencyMs
+                receiverStatusMessage = status.error
+                    ?: status.playerState
+                        ?.takeIf { state -> state.equals("failed", ignoreCase = true) }
+                        ?.let { "Cast receiver reported failure." }
                 logReceiverStatus(status)
                 emitState(session)
             }
@@ -291,7 +575,9 @@ class GlacierCastController(
     private fun logReceiverStatus(status: CastReceiverStatus) {
         log(
             "cast action=receiver_status " +
+                "mode=${status.mode ?: castModeLogName(activeCastMode)} " +
                 "state=${status.playerState ?: ""} " +
+                "error=${status.error ?: ""} " +
                 "latency_ms=${status.latencyMs ?: -1} " +
                 "current_sec=${status.currentTimeSec ?: -1.0} " +
                 "range_start_sec=${status.rangeStartSec ?: -1.0} " +
@@ -321,6 +607,8 @@ class GlacierCastController(
                     ?.castDevice
                     ?.friendlyName,
                 "latencyMs" to receiverLatencyMs.takeIf { isCasting },
+                "statusMessage" to receiverStatusMessage.takeIf { isCasting },
+                "castMode" to castModeLogName(activeCastMode).takeIf { isCasting },
             ),
         )
     }
@@ -358,6 +646,8 @@ class GlacierCastController(
                 "isCasting" to false,
                 "receiverName" to null,
                 "latencyMs" to null,
+                "statusMessage" to null,
+                "castMode" to null,
             ),
         )
     }
@@ -375,6 +665,8 @@ class GlacierCastController(
 
         override fun onSessionStarted(session: CastSession, sessionId: String) {
             receiverLatencyMs = null
+            receiverStatusMessage = null
+            activeCastMode = streamContext?.config?.castMode ?: CastMode.STABLE_HLS
             connectingRouteId = null
             connectingRouteName = null
             startKeepAlive()
@@ -389,8 +681,11 @@ class GlacierCastController(
         override fun onSessionStartFailed(session: CastSession, error: Int) {
             pendingLoad = false
             receiverLatencyMs = null
+            receiverStatusMessage = null
+            activeCastMode = CastMode.STABLE_HLS
             connectingRouteId = null
             connectingRouteName = null
+            stopPhoneWebRtcGateway()
             stopKeepAlive()
             emitDisconnected()
             emitRoutes(error = "Unable to connect to Cast device.")
@@ -409,9 +704,12 @@ class GlacierCastController(
         override fun onSessionEnded(session: CastSession, error: Int) {
             pendingLoad = false
             receiverLatencyMs = null
+            receiverStatusMessage = null
+            activeCastMode = CastMode.STABLE_HLS
             connectingRouteId = null
             connectingRouteName = null
             relayServer.close()
+            stopPhoneWebRtcGateway()
             stopKeepAlive()
             emitDisconnected()
             emitRoutes()
@@ -426,6 +724,8 @@ class GlacierCastController(
         override fun onSessionResuming(session: CastSession, sessionId: String) = Unit
 
         override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) {
+            receiverStatusMessage = null
+            activeCastMode = streamContext?.config?.castMode ?: CastMode.STABLE_HLS
             connectingRouteId = null
             connectingRouteName = null
             startKeepAlive()
@@ -439,8 +739,11 @@ class GlacierCastController(
 
         override fun onSessionResumeFailed(session: CastSession, error: Int) {
             receiverLatencyMs = null
+            receiverStatusMessage = null
+            activeCastMode = CastMode.STABLE_HLS
             connectingRouteId = null
             connectingRouteName = null
+            stopPhoneWebRtcGateway()
             stopKeepAlive()
             emitDisconnected()
             emitRoutes(error = "Unable to reconnect to Cast device.")
@@ -503,6 +806,13 @@ class GlacierCastController(
         private const val CAST_NAMESPACE = "urn:x-cast:com.namecallfilter.glacier.cast"
         private const val HLS_CONTENT_TYPE = "application/x-mpegURL"
 
+        private fun castModeLogName(mode: CastMode): String {
+            return when (mode) {
+                CastMode.STABLE_HLS -> "stableHls"
+                CastMode.LOW_LATENCY -> "lowLatency"
+            }
+        }
+
         private fun castStatusName(error: Int): String {
             return when (error) {
                 0 -> "SUCCESS"
@@ -525,4 +835,10 @@ data class CastStreamContext(
     val subtitle: String?,
     val quality: String?,
     val config: StreamProxyConfig,
+)
+
+private data class WebRtcTarget(
+    val channelLogin: String,
+    val whepUrl: String,
+    val gatewayHostedOnPhone: Boolean,
 )

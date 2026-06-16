@@ -24,6 +24,16 @@ SettingsStore _$SettingsStoreFromJson(
   ..defaultToHighestQuality = json['defaultToHighestQuality'] as bool? ?? false
   ..useTextureRendering = json['useTextureRendering'] as bool? ?? true
   ..keepScreenAwake = json['keepScreenAwake'] as bool? ?? true
+  ..castMode =
+      $enumDecodeNullable(
+        _$CastModeEnumMap,
+        json['castMode'],
+        unknownValue: CastMode.stableHls,
+      ) ??
+      CastMode.stableHls
+  ..webRtcGatewayUrl = json['webRtcGatewayUrl'] as String? ?? ''
+  ..whepUrlOverride = json['whepUrlOverride'] as String? ?? ''
+  ..webRtcAutoFallback = json['webRtcAutoFallback'] as bool? ?? false
   ..streamProxyMode =
       $enumDecodeNullable(
         _$StreamProxyModeEnumMap,
@@ -120,6 +130,10 @@ Map<String, dynamic> _$SettingsStoreToJson(
   'defaultToHighestQuality': instance.defaultToHighestQuality,
   'useTextureRendering': instance.useTextureRendering,
   'keepScreenAwake': instance.keepScreenAwake,
+  'castMode': _$CastModeEnumMap[instance.castMode]!,
+  'webRtcGatewayUrl': instance.webRtcGatewayUrl,
+  'whepUrlOverride': instance.whepUrlOverride,
+  'webRtcAutoFallback': instance.webRtcAutoFallback,
   'streamProxyMode': _$StreamProxyModeEnumMap[instance.streamProxyMode]!,
   'streamProxyUrls': instance.streamProxyUrls,
   'streamProxyWhitelistedChannels': instance.streamProxyWhitelistedChannels,
@@ -168,6 +182,11 @@ const _$ThemeTypeEnumMap = {
   ThemeType.system: 'system',
   ThemeType.light: 'light',
   ThemeType.dark: 'dark',
+};
+
+const _$CastModeEnumMap = {
+  CastMode.stableHls: 'stableHls',
+  CastMode.lowLatency: 'lowLatency',
 };
 
 const _$StreamProxyModeEnumMap = {
@@ -367,6 +386,78 @@ mixin _$SettingsStore on _SettingsStoreBase, Store {
   set keepScreenAwake(bool value) {
     _$keepScreenAwakeAtom.reportWrite(value, super.keepScreenAwake, () {
       super.keepScreenAwake = value;
+    });
+  }
+
+  late final _$castModeAtom = Atom(
+    name: '_SettingsStoreBase.castMode',
+    context: context,
+  );
+
+  @override
+  CastMode get castMode {
+    _$castModeAtom.reportRead();
+    return super.castMode;
+  }
+
+  @override
+  set castMode(CastMode value) {
+    _$castModeAtom.reportWrite(value, super.castMode, () {
+      super.castMode = value;
+    });
+  }
+
+  late final _$webRtcGatewayUrlAtom = Atom(
+    name: '_SettingsStoreBase.webRtcGatewayUrl',
+    context: context,
+  );
+
+  @override
+  String get webRtcGatewayUrl {
+    _$webRtcGatewayUrlAtom.reportRead();
+    return super.webRtcGatewayUrl;
+  }
+
+  @override
+  set webRtcGatewayUrl(String value) {
+    _$webRtcGatewayUrlAtom.reportWrite(value, super.webRtcGatewayUrl, () {
+      super.webRtcGatewayUrl = value;
+    });
+  }
+
+  late final _$whepUrlOverrideAtom = Atom(
+    name: '_SettingsStoreBase.whepUrlOverride',
+    context: context,
+  );
+
+  @override
+  String get whepUrlOverride {
+    _$whepUrlOverrideAtom.reportRead();
+    return super.whepUrlOverride;
+  }
+
+  @override
+  set whepUrlOverride(String value) {
+    _$whepUrlOverrideAtom.reportWrite(value, super.whepUrlOverride, () {
+      super.whepUrlOverride = value;
+    });
+  }
+
+  late final _$webRtcAutoFallbackAtom = Atom(
+    name: '_SettingsStoreBase.webRtcAutoFallback',
+    context: context,
+  );
+
+  @override
+  bool get webRtcAutoFallback {
+    _$webRtcAutoFallbackAtom.reportRead();
+    return super.webRtcAutoFallback;
+  }
+
+  @override
+  set webRtcAutoFallback(bool value) {
+    _$webRtcAutoFallbackAtom.reportWrite(value, super.webRtcAutoFallback, () {
+      super.webRtcAutoFallback = value;
     });
   }
 
@@ -1257,6 +1348,10 @@ showVideo: ${showVideo},
 defaultToHighestQuality: ${defaultToHighestQuality},
 useTextureRendering: ${useTextureRendering},
 keepScreenAwake: ${keepScreenAwake},
+castMode: ${castMode},
+webRtcGatewayUrl: ${webRtcGatewayUrl},
+whepUrlOverride: ${whepUrlOverride},
+webRtcAutoFallback: ${webRtcAutoFallback},
 streamProxyMode: ${streamProxyMode},
 streamProxyUrls: ${streamProxyUrls},
 streamProxyWhitelistedChannels: ${streamProxyWhitelistedChannels},

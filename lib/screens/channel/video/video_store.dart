@@ -746,78 +746,130 @@ abstract class VideoStoreBase with Store {
   ///
   /// Key optimizations over previous implementation:
   /// - Only tracks when overlay is visible (pauses when hidden)
-  /// - Properly clears setTimeout IDs to prevent accumulation
+  /// - Updates the visible latency display every second while stats are active
+  /// - Properly clears timer IDs to prevent accumulation
   /// - Has explicit stop() method for cleanup
   /// - Skips cycles entirely when overlay hidden (saves CPU)
   Future<void> _listenOnLatencyChanges() async {
+    final visibleLatencyReadInterval =
+        VideoTimingConstants.visibleLatencyReadInterval.inMilliseconds;
+
     try {
-      await videoWebViewController.runJavaScript(r'''
+      await videoWebViewController.runJavaScript('''
         window._latencyTracker ??= {
           CYCLE_INTERVAL: 60000,
           STATS_ACTIVE_TIME: 1500,
           INITIAL_RETRY_INTERVAL: 3000,
+          READ_INTERVAL: $visibleLatencyReadInterval,
           MAX_INITIAL_RETRIES: 4,
 
           cycleCount: 0,
           hasInitialLatency: false,
           timeoutId: null,
+          readIntervalId: null,
           isRunning: false,
           overlayVisible: true,
+          continuousReading: false,
           isCycling: false,
 
           init() {
             if (this.isRunning) return;
             this.isRunning = true;
-            if (!this.isCycling && !this.timeoutId) {
+            if (!this.isCycling && !this.timeoutId && !this.readIntervalId) {
               this._cycle();
             }
           },
 
           stop() {
             this.isRunning = false;
+            this._clearScheduledCycle();
+            this._stopReading();
+            this._setStatsEnabled(false);
+          },
+
+          setOverlayVisible(visible, continuousReading = visible) {
+            this.overlayVisible = visible;
+            this.continuousReading = continuousReading;
+
+            if (!visible || !continuousReading) {
+              this._stopReading();
+            }
+
+            if (!visible) {
+              if (!this.isCycling) {
+                this._setStatsEnabled(false);
+              }
+              if (this.isRunning && !this.timeoutId) {
+                this._scheduleCycle(5000);
+              }
+              return;
+            }
+
+            if (continuousReading) {
+              this._clearScheduledCycle();
+            }
+
+            // Resume immediately when visible tracking becomes active.
+            if (this.isRunning && !this.isCycling && !this.readIntervalId) {
+              this._cycle();
+            }
+          },
+
+          _clearScheduledCycle() {
             if (this.timeoutId) {
               clearTimeout(this.timeoutId);
               this.timeoutId = null;
             }
           },
 
-          setOverlayVisible(visible) {
-            this.overlayVisible = visible;
-            // Resume immediately when overlay becomes visible
-            if (visible && this.isRunning && !this.isCycling && !this.timeoutId) {
-              this._cycle();
+          _scheduleCycle(delay) {
+            this._clearScheduledCycle();
+            if (!this.isRunning) return;
+            this.timeoutId = setTimeout(
+              () => this._cycle(),
+              Math.max(delay, this.READ_INTERVAL)
+            );
+          },
+
+          _startReading() {
+            this._stopReading();
+            this._readLatency();
+            this.readIntervalId = setInterval(
+              () => this._readLatency(),
+              this.READ_INTERVAL
+            );
+          },
+
+          _stopReading() {
+            if (this.readIntervalId) {
+              clearInterval(this.readIntervalId);
+              this.readIntervalId = null;
             }
           },
 
           async _cycle() {
             if (this.isCycling) return;
             this.isCycling = true;
+            this._clearScheduledCycle();
+            const cycleStart = Date.now();
 
             try {
-              // Clear timeout ID synchronously at entry to prevent race conditions
-              // (e.g., setOverlayVisible calling _cycle while timeout is firing)
-              const currentTimeoutId = this.timeoutId;
-              this.timeoutId = null;
-              if (currentTimeoutId) {
-                clearTimeout(currentTimeoutId);
-              }
-
               if (!this.isRunning) return;
 
-              // Skip cycle entirely if overlay not visible - major CPU savings
               if (!this.overlayVisible) {
-                this.timeoutId = setTimeout(() => this._cycle(), 5000);
+                this._stopReading();
+                await this._setStatsEnabled(false);
+                this._scheduleCycle(5000);
                 return;
               }
 
               // Defer if another operation (e.g., quality selection) is using the settings menu
               if (window._promiseQueueLength > 0) {
-                this.timeoutId = setTimeout(() => this._cycle(), 2000);
+                this._scheduleCycle(2000);
                 return;
               }
 
               this.cycleCount++;
-              const cycleStart = Date.now();
 
               await this._setStatsEnabled(true);
 
@@ -826,6 +878,15 @@ abstract class VideoStoreBase with Store {
               await new Promise(resolve => setTimeout(resolve, waitTime));
 
               this._readLatency();
+
+              if (!this.isRunning) return;
+
+              if (this.overlayVisible && this.continuousReading) {
+                this._startReading();
+                return;
+              }
+
+              this._stopReading();
               await this._setStatsEnabled(false);
 
               if (!this.isRunning) return;
@@ -841,7 +902,7 @@ abstract class VideoStoreBase with Store {
               }
 
               // Schedule next cycle
-              this.timeoutId = setTimeout(() => this._cycle(), Math.max(nextInterval, 1000));
+              this._scheduleCycle(nextInterval);
             } finally {
               this.isCycling = false;
             }
@@ -880,7 +941,7 @@ abstract class VideoStoreBase with Store {
                 let latencyText = latencyElement.textContent.trim();
 
                 // Convert to abbreviated unit: "4.69 sec." -> "4.69s"
-                const match = latencyText.match(/([0-9.]+)\s*sec/i);
+                const match = latencyText.match(/([0-9.]+)\\s*sec/i);
                 if (match) {
                   latencyText = parseFloat(match[1]).toFixed(2) + 's';
                   this.hasInitialLatency = true;
@@ -906,33 +967,23 @@ abstract class VideoStoreBase with Store {
 
   /// Updates the latency tracker's overlay visibility state.
   ///
-  /// When overlay is hidden, the latency tracker pauses its polling cycle
-  /// to save CPU. When overlay becomes visible again, it resumes.
-  ///
-  /// However, if autoSyncChatDelay is enabled, the tracker always runs
-  /// regardless of overlay visibility to keep chat delay accurate.
+  /// When the latency overlay is visible, the tracker keeps Twitch's video
+  /// stats active and reads the visible label once per second.
   void _updateLatencyTrackerVisibility(bool visible) {
     // Skip if latency tracking isn't active at all
     if (!settingsStore.showLatency && !settingsStore.autoSyncChatDelay) return;
 
-    // If auto-sync is enabled, always keep tracker running (don't pause on hide)
-    // to ensure chat delay stays synchronized even during long viewing sessions
-    if (settingsStore.autoSyncChatDelay) {
-      // Always report visible to keep tracking active
-      try {
-        videoWebViewController.runJavaScript(
-          'window._latencyTracker?.setOverlayVisible(true)',
-        );
-      } catch (e) {
-        debugPrint(e.toString());
-      }
-      return;
-    }
+    final shouldTrack =
+        (settingsStore.showLatency && visible) ||
+        settingsStore.autoSyncChatDelay;
+    final shouldUpdateVisibleLatency = settingsStore.showLatency && visible;
 
-    // Only pause/resume based on visibility if just showLatency is enabled
     try {
       videoWebViewController.runJavaScript(
-        'window._latencyTracker?.setOverlayVisible($visible)',
+        'window._latencyTracker?.setOverlayVisible('
+        '$shouldTrack, '
+        '$shouldUpdateVisibleLatency'
+        ')',
       );
     } catch (e) {
       debugPrint(e.toString());

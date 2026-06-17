@@ -59,6 +59,15 @@ void main() {
     });
   });
 
+  group('VideoTimingConstants video latency tracker', () {
+    test('updates the visible latency display once per second', () {
+      expect(
+        VideoTimingConstants.visibleLatencyReadInterval,
+        const Duration(seconds: 1),
+      );
+    });
+  });
+
   group('VideoTimingConstants overlay and cleanup', () {
     test('overlayQuickHide is not slower than overlayAutoHide', () {
       expect(

@@ -6,6 +6,7 @@ class VideoTimingConstants {
   // Latency / chat sync
   static const int highLatencyThresholdSeconds = 30;
   static const int chatSyncDriftToleranceSeconds = 2;
+  static const visibleLatencyReadInterval = Duration(seconds: 1);
 
   /// Maximum consecutive high-latency interventions (seek/refresh) before
   /// giving up on latency-driven recovery. Persistent high readings usually

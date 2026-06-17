@@ -61,6 +61,50 @@ class HlsPlaylistRewriterTest {
     }
 
     @Test
+    fun rewritePlaylistMatchesTwitchQualityLabelsWithSuffixes() {
+        val playlist = """
+            #EXTM3U
+            #EXT-X-STREAM-INF:BANDWIDTH=4500000,RESOLUTION=1920x1080,FRAME-RATE=60.000,SCORE=1.0
+            source/index.m3u8
+            #EXT-X-STREAM-INF:BANDWIDTH=2200000,RESOLUTION=1280x720,FRAME-RATE=60.000,SCORE=0.7
+            720/index.m3u8
+        """.trimIndent()
+
+        val result = HlsPlaylistRewriter.rewritePlaylist(
+            body = playlist,
+            baseUrl = "https://usher.ttvnw.net/api/channel/hls/streamer.m3u8",
+            selectedQuality = "1080p60 (Source)",
+            rewriteUrl = { "http://phone/relay/${it.substringAfterLast("/")}" },
+        )
+
+        assertEquals("1080p60", result.selectedQuality)
+        assertTrue(result.body.contains("RESOLUTION=1920x1080"))
+        assertFalse(result.body.contains("RESOLUTION=1280x720"))
+    }
+
+    @Test
+    fun rewritePlaylistMatchesTwitchQualityLabelsWithoutFrameRate() {
+        val playlist = """
+            #EXTM3U
+            #EXT-X-STREAM-INF:BANDWIDTH=4500000,RESOLUTION=1920x1080,FRAME-RATE=60.000,SCORE=1.0
+            source/index.m3u8
+            #EXT-X-STREAM-INF:BANDWIDTH=1200000,RESOLUTION=854x480,FRAME-RATE=30.000,SCORE=0.5
+            480/index.m3u8
+        """.trimIndent()
+
+        val result = HlsPlaylistRewriter.rewritePlaylist(
+            body = playlist,
+            baseUrl = "https://usher.ttvnw.net/api/channel/hls/streamer.m3u8",
+            selectedQuality = "480p",
+            rewriteUrl = { "http://phone/relay/${it.substringAfterLast("/")}" },
+        )
+
+        assertEquals("480p30", result.selectedQuality)
+        assertTrue(result.body.contains("RESOLUTION=854x480"))
+        assertFalse(result.body.contains("RESOLUTION=1920x1080"))
+    }
+
+    @Test
     fun rewritePlaylistRewritesAllMediaPlaylistUrisThroughRelay() {
         val playlist = """
             #EXTM3U

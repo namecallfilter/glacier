@@ -76,6 +76,12 @@ android {
         )
     }
 
+    sourceSets {
+        getByName("test") {
+            java.srcDir("../../test/android/kotlin")
+        }
+    }
+
     signingConfigs {
         create("release") {
             keyAlias = keystoreProperties["keyAlias"] as String?

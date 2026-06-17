@@ -24,6 +24,9 @@ SettingsStore _$SettingsStoreFromJson(
   ..defaultToHighestQuality = json['defaultToHighestQuality'] as bool? ?? false
   ..useTextureRendering = json['useTextureRendering'] as bool? ?? true
   ..keepScreenAwake = json['keepScreenAwake'] as bool? ?? true
+  ..enablePictureInPicture = json['enablePictureInPicture'] as bool? ?? true
+  ..swipeDownToPictureInPicture =
+      json['swipeDownToPictureInPicture'] as bool? ?? true
   ..streamProxyMode =
       $enumDecodeNullable(
         _$StreamProxyModeEnumMap,
@@ -120,6 +123,8 @@ Map<String, dynamic> _$SettingsStoreToJson(
   'defaultToHighestQuality': instance.defaultToHighestQuality,
   'useTextureRendering': instance.useTextureRendering,
   'keepScreenAwake': instance.keepScreenAwake,
+  'enablePictureInPicture': instance.enablePictureInPicture,
+  'swipeDownToPictureInPicture': instance.swipeDownToPictureInPicture,
   'streamProxyMode': _$StreamProxyModeEnumMap[instance.streamProxyMode]!,
   'streamProxyUrls': instance.streamProxyUrls,
   'streamProxyWhitelistedChannels': instance.streamProxyWhitelistedChannels,
@@ -195,6 +200,14 @@ const _$LandscapeCutoutTypeEnumMap = {
 // ignore_for_file: non_constant_identifier_names, unnecessary_brace_in_string_interps, unnecessary_lambdas, prefer_expression_function_bodies, lines_longer_than_80_chars, avoid_as, avoid_annotating_with_dynamic, no_leading_underscores_for_local_identifiers
 
 mixin _$SettingsStore on _SettingsStoreBase, Store {
+  Computed<bool>? _$canSwipeDownToPictureInPictureComputed;
+
+  @override
+  bool get canSwipeDownToPictureInPicture =>
+      (_$canSwipeDownToPictureInPictureComputed ??= Computed<bool>(
+        () => super.canSwipeDownToPictureInPicture,
+        name: '_SettingsStoreBase.canSwipeDownToPictureInPicture',
+      )).value;
   Computed<double>? _$effectiveChatDelayComputed;
 
   @override
@@ -368,6 +381,50 @@ mixin _$SettingsStore on _SettingsStoreBase, Store {
     _$keepScreenAwakeAtom.reportWrite(value, super.keepScreenAwake, () {
       super.keepScreenAwake = value;
     });
+  }
+
+  late final _$enablePictureInPictureAtom = Atom(
+    name: '_SettingsStoreBase.enablePictureInPicture',
+    context: context,
+  );
+
+  @override
+  bool get enablePictureInPicture {
+    _$enablePictureInPictureAtom.reportRead();
+    return super.enablePictureInPicture;
+  }
+
+  @override
+  set enablePictureInPicture(bool value) {
+    _$enablePictureInPictureAtom.reportWrite(
+      value,
+      super.enablePictureInPicture,
+      () {
+        super.enablePictureInPicture = value;
+      },
+    );
+  }
+
+  late final _$swipeDownToPictureInPictureAtom = Atom(
+    name: '_SettingsStoreBase.swipeDownToPictureInPicture',
+    context: context,
+  );
+
+  @override
+  bool get swipeDownToPictureInPicture {
+    _$swipeDownToPictureInPictureAtom.reportRead();
+    return super.swipeDownToPictureInPicture;
+  }
+
+  @override
+  set swipeDownToPictureInPicture(bool value) {
+    _$swipeDownToPictureInPictureAtom.reportWrite(
+      value,
+      super.swipeDownToPictureInPicture,
+      () {
+        super.swipeDownToPictureInPicture = value;
+      },
+    );
   }
 
   late final _$streamProxyModeAtom = Atom(
@@ -1257,6 +1314,8 @@ showVideo: ${showVideo},
 defaultToHighestQuality: ${defaultToHighestQuality},
 useTextureRendering: ${useTextureRendering},
 keepScreenAwake: ${keepScreenAwake},
+enablePictureInPicture: ${enablePictureInPicture},
+swipeDownToPictureInPicture: ${swipeDownToPictureInPicture},
 streamProxyMode: ${streamProxyMode},
 streamProxyUrls: ${streamProxyUrls},
 streamProxyWhitelistedChannels: ${streamProxyWhitelistedChannels},
@@ -1300,6 +1359,7 @@ matchWholeWord: ${matchWholeWord},
 fullScreen: ${fullScreen},
 fullScreenChatOverlay: ${fullScreenChatOverlay},
 pinnedChannelIds: ${pinnedChannelIds},
+canSwipeDownToPictureInPicture: ${canSwipeDownToPictureInPicture},
 effectiveChatDelay: ${effectiveChatDelay}
     ''';
   }

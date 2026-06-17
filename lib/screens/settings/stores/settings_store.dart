@@ -66,6 +66,8 @@ abstract class _SettingsStoreBase with Store {
   static const defaultDefaultToHighestQuality = false;
   static const defaultUseTextureRendering = true;
   static const defaultKeepScreenAwake = true;
+  static const defaultEnablePictureInPicture = true;
+  static const defaultSwipeDownToPictureInPicture = true;
   static const defaultStreamProxyMode = StreamProxyMode.off;
   static const defaultStreamProxyUrls = <String>[];
   static const defaultStreamProxyWhitelistedChannels = <String>[];
@@ -91,6 +93,18 @@ abstract class _SettingsStoreBase with Store {
   @JsonKey(defaultValue: defaultKeepScreenAwake)
   @observable
   var keepScreenAwake = defaultKeepScreenAwake;
+
+  @JsonKey(defaultValue: defaultEnablePictureInPicture)
+  @observable
+  var enablePictureInPicture = defaultEnablePictureInPicture;
+
+  @JsonKey(defaultValue: defaultSwipeDownToPictureInPicture)
+  @observable
+  var swipeDownToPictureInPicture = defaultSwipeDownToPictureInPicture;
+
+  @computed
+  bool get canSwipeDownToPictureInPicture =>
+      enablePictureInPicture && swipeDownToPictureInPicture;
 
   @JsonKey(
     defaultValue: defaultStreamProxyMode,
@@ -127,6 +141,8 @@ abstract class _SettingsStoreBase with Store {
     defaultToHighestQuality = defaultDefaultToHighestQuality;
     useTextureRendering = defaultUseTextureRendering;
     keepScreenAwake = defaultKeepScreenAwake;
+    enablePictureInPicture = defaultEnablePictureInPicture;
+    swipeDownToPictureInPicture = defaultSwipeDownToPictureInPicture;
     streamProxyMode = defaultStreamProxyMode;
     streamProxyUrls = defaultStreamProxyUrls;
     streamProxyWhitelistedChannels = defaultStreamProxyWhitelistedChannels;

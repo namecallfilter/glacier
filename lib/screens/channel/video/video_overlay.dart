@@ -513,7 +513,8 @@ class VideoOverlay extends StatelessWidget {
                       ValueListenableBuilder<CastState>(
                         valueListenable: StreamProxyBridge.castState,
                         builder: (context, castState, _) {
-                          if (castState.isCasting) {
+                          if (castState.isCasting ||
+                              !settingsStore.enablePictureInPicture) {
                             return const SizedBox.shrink();
                           }
 

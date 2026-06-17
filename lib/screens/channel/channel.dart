@@ -122,7 +122,10 @@ class _VideoChatState extends State<VideoChat>
 
   void _handlePipDragStart(DragStartDetails details) {
     // Disable drag gesture when already in PiP mode or video is not playing
-    if (_videoStore.isInPipMode || _videoStore.paused || _videoStore.loading) {
+    if (!_videoStore.canSwipeDownToPictureInPicture ||
+        _videoStore.isInPipMode ||
+        _videoStore.paused ||
+        _videoStore.loading) {
       return;
     }
 
@@ -136,6 +139,7 @@ class _VideoChatState extends State<VideoChat>
 
   void _handlePipDragUpdate(DragUpdateDetails details) {
     if (!_isPipDragging ||
+        !_videoStore.canSwipeDownToPictureInPicture ||
         _videoStore.isInPipMode ||
         _videoStore.paused ||
         _videoStore.loading) {
@@ -163,6 +167,7 @@ class _VideoChatState extends State<VideoChat>
 
   void _handlePipDragEnd(DragEndDetails details) {
     if (!_isPipDragging ||
+        !_videoStore.canSwipeDownToPictureInPicture ||
         _videoStore.isInPipMode ||
         _videoStore.paused ||
         _videoStore.loading) {
@@ -754,6 +759,8 @@ class _VideoChatState extends State<VideoChat>
     if (Platform.isAndroid) {
       return PipWidget(
         pipLayout: PipActionsLayout.mediaOnlyPause,
+        onPipEntered: _videoStore.handleNativePictureInPictureEntered,
+        onPipExited: _videoStore.handleNativePictureInPictureExited,
         onPipAction: (_) => _videoStore.handlePausePlay(),
         pipChild: player,
         child: videoChat,

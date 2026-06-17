@@ -14,6 +14,9 @@ void main() {
       expect(store.showVideo, isTrue);
       expect(store.defaultToHighestQuality, isFalse);
       expect(store.useTextureRendering, isTrue);
+      expect(store.enablePictureInPicture, isTrue);
+      expect(store.swipeDownToPictureInPicture, isTrue);
+      expect(store.canSwipeDownToPictureInPicture, isTrue);
       expect(store.streamProxyMode, StreamProxyMode.off);
       expect(store.streamProxyUrls, isEmpty);
       expect(store.streamProxyWhitelistedChannels, isEmpty);
@@ -69,6 +72,8 @@ void main() {
       store.chatDelay = 5.0;
       store.syncedChatDelay = 8.0;
       store.showVideo = false;
+      store.enablePictureInPicture = false;
+      store.swipeDownToPictureInPicture = false;
       store.streamProxyMode = StreamProxyMode.ttvLolPro;
       store.streamProxyUrls = [
         'proxy.example.com:3128',
@@ -91,6 +96,9 @@ void main() {
       expect(restored.syncedChatDelay, 0.0);
       expect(json.containsKey('syncedChatDelay'), isFalse);
       expect(restored.showVideo, isFalse);
+      expect(restored.enablePictureInPicture, isFalse);
+      expect(restored.swipeDownToPictureInPicture, isFalse);
+      expect(restored.canSwipeDownToPictureInPicture, isFalse);
       expect(restored.streamProxyMode, StreamProxyMode.ttvLolPro);
       expect(restored.streamProxyUrls, [
         'proxy.example.com:3128',
@@ -148,6 +156,8 @@ void main() {
       store.showVideo = false;
       store.defaultToHighestQuality = true;
       store.useTextureRendering = false;
+      store.enablePictureInPicture = false;
+      store.swipeDownToPictureInPicture = false;
       store.streamProxyMode = StreamProxyMode.ttvLolPro;
       store.streamProxyUrls = ['proxy.example.com:3128'];
       store.streamProxyWhitelistedChannels = ['streamer_name123'];
@@ -160,6 +170,9 @@ void main() {
       expect(store.showVideo, isTrue);
       expect(store.defaultToHighestQuality, isFalse);
       expect(store.useTextureRendering, isTrue);
+      expect(store.enablePictureInPicture, isTrue);
+      expect(store.swipeDownToPictureInPicture, isTrue);
+      expect(store.canSwipeDownToPictureInPicture, isTrue);
       expect(store.streamProxyMode, StreamProxyMode.off);
       expect(store.streamProxyUrls, isEmpty);
       expect(store.streamProxyWhitelistedChannels, isEmpty);
@@ -268,6 +281,19 @@ void main() {
       store.autoSyncChatDelay = true;
 
       expect(store.effectiveChatDelay, 9.0);
+    });
+
+    test('swipe down to PiP depends on global PiP enablement', () {
+      final store = SettingsStore.fromJson({});
+
+      store.swipeDownToPictureInPicture = false;
+      expect(store.canSwipeDownToPictureInPicture, isFalse);
+
+      store.swipeDownToPictureInPicture = true;
+      expect(store.canSwipeDownToPictureInPicture, isTrue);
+
+      store.enablePictureInPicture = false;
+      expect(store.canSwipeDownToPictureInPicture, isFalse);
     });
   });
 

@@ -269,6 +269,42 @@ mixin _$VideoStore on VideoStoreBase, Store {
   );
 
   @override
+  void prepareForPictureInPictureAutoEnter() {
+    final _$actionInfo = _$VideoStoreBaseActionController.startAction(
+      name: 'VideoStoreBase.prepareForPictureInPictureAutoEnter',
+    );
+    try {
+      return super.prepareForPictureInPictureAutoEnter();
+    } finally {
+      _$VideoStoreBaseActionController.endAction(_$actionInfo);
+    }
+  }
+
+  @override
+  void handleNativePictureInPictureEntered() {
+    final _$actionInfo = _$VideoStoreBaseActionController.startAction(
+      name: 'VideoStoreBase.handleNativePictureInPictureEntered',
+    );
+    try {
+      return super.handleNativePictureInPictureEntered();
+    } finally {
+      _$VideoStoreBaseActionController.endAction(_$actionInfo);
+    }
+  }
+
+  @override
+  void handleNativePictureInPictureExited() {
+    final _$actionInfo = _$VideoStoreBaseActionController.startAction(
+      name: 'VideoStoreBase.handleNativePictureInPictureExited',
+    );
+    try {
+      return super.handleNativePictureInPictureExited();
+    } finally {
+      _$VideoStoreBaseActionController.endAction(_$actionInfo);
+    }
+  }
+
+  @override
   void handleVideoTap() {
     final _$actionInfo = _$VideoStoreBaseActionController.startAction(
       name: 'VideoStoreBase.handleVideoTap',

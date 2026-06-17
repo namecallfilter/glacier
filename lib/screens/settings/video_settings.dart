@@ -39,6 +39,26 @@ class VideoSettings extends StatelessWidget {
             onChanged: (newValue) =>
                 settingsStore.useTextureRendering = newValue,
           ),
+          SettingsListSwitch(
+            title: 'Picture-in-picture',
+            subtitle: const Text(
+              'Allows video to continue in a floating player when leaving the app.',
+            ),
+            value: settingsStore.enablePictureInPicture,
+            onChanged: (newValue) =>
+                settingsStore.enablePictureInPicture = newValue,
+          ),
+          SettingsListSwitch(
+            title: 'Swipe down for picture-in-picture',
+            subtitle: const Text(
+              'Drag the video down to enter picture-in-picture.',
+            ),
+            value: settingsStore.swipeDownToPictureInPicture,
+            onChanged: settingsStore.enablePictureInPicture
+                ? (newValue) =>
+                      settingsStore.swipeDownToPictureInPicture = newValue
+                : null,
+          ),
           SettingsListSelect(
             title: 'Stream proxy mode',
             selectedOption:

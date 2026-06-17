@@ -51,6 +51,9 @@ abstract class VideoStoreBase with Store {
 
   var _firstTimeSettingQuality = true;
   var _highLatencyCount = 0;
+  var _enteringPictureInPicture = false;
+  var _playingBeforePictureInPicture = false;
+  var _pauseRequestedByUser = false;
 
   /// Whether [initVideo] should run on the next [onPageFinished].
   ///
@@ -158,8 +161,7 @@ abstract class VideoStoreBase with Store {
         ..addJavaScriptChannel(
           'VideoPause',
           onMessageReceived: (message) {
-            _paused = true;
-            if (Platform.isAndroid) pip.setIsPlaying(false);
+            _handleVideoPaused();
           },
         )
         ..addJavaScriptChannel(
@@ -167,29 +169,23 @@ abstract class VideoStoreBase with Store {
           onMessageReceived: (message) {
             _loading = false;
             _paused = false;
+            _pauseRequestedByUser = false;
+            if (_isInPipMode || _enteringPictureInPicture) {
+              _playingBeforePictureInPicture = true;
+            }
             if (Platform.isAndroid) pip.setIsPlaying(true);
           },
         )
         ..addJavaScriptChannel(
           'PipEntered',
           onMessageReceived: (message) {
-            _overlayWasVisibleBeforePip = _overlayVisible;
-            _isInPipMode = true;
-            _overlayTimer?.cancel();
-            _overlayVisible = true;
+            _handlePictureInPictureEntered();
           },
         )
         ..addJavaScriptChannel(
           'PipExited',
           onMessageReceived: (message) {
-            _isInPipMode = false;
-            if (_overlayWasVisibleBeforePip) {
-              _updateLatencyTrackerVisibility(true);
-              _scheduleOverlayHide();
-            } else {
-              _overlayVisible = false;
-              _updateLatencyTrackerVisibility(false);
-            }
+            _handlePictureInPictureExited();
           },
         )
         ..setNavigationDelegate(_navigationDelegate);
@@ -333,7 +329,8 @@ abstract class VideoStoreBase with Store {
     // On Android, enable auto PiP mode (setAutoEnterEnabled) if the device supports it.
     if (Platform.isAndroid) {
       _disposeAndroidAutoPipReaction = autorun((_) async {
-        if (settingsStore.showVideo && await SimplePip.isAutoPipAvailable) {
+        if (canAutoEnterPictureInPicture &&
+            await SimplePip.isAutoPipAvailable) {
           pip.setAutoPipMode();
         } else {
           pip.setAutoPipMode(autoEnter: false);
@@ -391,6 +388,23 @@ abstract class VideoStoreBase with Store {
 
   bool get isCasting => StreamProxyBridge.castState.value.isCasting;
 
+  bool get canUsePictureInPicture =>
+      settingsStore.showVideo && settingsStore.enablePictureInPicture;
+
+  bool get canAutoEnterPictureInPicture =>
+      canUsePictureInPicture && !_paused && !_loading && !isCasting;
+
+  bool get canSwipeDownToPictureInPicture =>
+      canUsePictureInPicture &&
+      settingsStore.canSwipeDownToPictureInPicture &&
+      !isCasting;
+
+  bool get _shouldKeepPlaybackActiveForPictureInPicture =>
+      Platform.isAndroid &&
+      settingsStore.enablePictureInPicture &&
+      _playingBeforePictureInPicture &&
+      (_isInPipMode || _enteringPictureInPicture);
+
   void _handleCastStateChanged() {
     final castState = StreamProxyBridge.castState.value;
 
@@ -416,6 +430,92 @@ abstract class VideoStoreBase with Store {
       _paused = true;
       if (Platform.isAndroid) pip.setIsPlaying(false);
     }
+  }
+
+  void _handleVideoPaused() {
+    if (_shouldKeepPlaybackActiveForPictureInPicture &&
+        !_pauseRequestedByUser) {
+      unawaited(_resumePlaybackForPictureInPicture());
+      return;
+    }
+
+    _pauseRequestedByUser = false;
+    _playingBeforePictureInPicture = false;
+    _paused = true;
+    if (Platform.isAndroid) pip.setIsPlaying(false);
+  }
+
+  void _handlePictureInPictureEntered() {
+    if (!_isInPipMode) {
+      _overlayWasVisibleBeforePip = _overlayVisible;
+      if (!_enteringPictureInPicture) {
+        _playingBeforePictureInPicture = !_paused;
+      }
+    }
+
+    _enteringPictureInPicture = false;
+    _isInPipMode = true;
+    _overlayTimer?.cancel();
+    _overlayVisible = true;
+
+    if (Platform.isAndroid) {
+      pip.setIsPlaying(!_paused);
+    }
+  }
+
+  void _handlePictureInPictureExited() {
+    _enteringPictureInPicture = false;
+    _playingBeforePictureInPicture = false;
+    _isInPipMode = false;
+
+    if (_overlayWasVisibleBeforePip) {
+      _updateLatencyTrackerVisibility(true);
+      _scheduleOverlayHide();
+    } else {
+      _overlayVisible = false;
+      _updateLatencyTrackerVisibility(false);
+    }
+  }
+
+  Future<void> _resumePlaybackForPictureInPicture() async {
+    if (!_shouldKeepPlaybackActiveForPictureInPicture) return;
+
+    try {
+      await videoWebViewController.runJavaScript('''
+        (() => {
+          const videoElement = window._videoEl || document.getElementsByTagName("video")[0];
+          if (!videoElement) return;
+          videoElement.play().catch(() => {});
+        })();
+      ''');
+      if (Platform.isAndroid) {
+        await pip.setIsPlaying(true);
+      }
+    } catch (e) {
+      debugPrint(e.toString());
+    }
+  }
+
+  @action
+  void prepareForPictureInPictureAutoEnter() {
+    if (!canAutoEnterPictureInPicture) return;
+
+    _enteringPictureInPicture = true;
+    _playingBeforePictureInPicture = true;
+    if (Platform.isAndroid) {
+      pip.setIsPlaying(true);
+    }
+  }
+
+  @action
+  void handleNativePictureInPictureEntered() {
+    _handlePictureInPictureEntered();
+    unawaited(_resumePlaybackForPictureInPicture());
+  }
+
+  @action
+  void handleNativePictureInPictureExited() {
+    _handlePictureInPictureExited();
   }
 
   void _syncChatDelayFromCurrentSource() {
@@ -1080,6 +1180,11 @@ abstract class VideoStoreBase with Store {
   /// Handles app resume event for immediate stream info refresh in chat-only mode.
   @action
   void handleAppResume() {
+    _enteringPictureInPicture = false;
+    if (!_isInPipMode) {
+      _playingBeforePictureInPicture = false;
+    }
+
     // Only refresh immediately in chat-only mode
     if (!settingsStore.showVideo) {
       updateStreamInfo(forceUpdate: true);
@@ -1169,11 +1274,13 @@ abstract class VideoStoreBase with Store {
           '(window._videoEl || document.getElementsByTagName("video")[0])?.play();',
         );
       } else {
+        _pauseRequestedByUser = true;
         videoWebViewController.runJavaScript(
           '(window._videoEl || document.getElementsByTagName("video")[0])?.pause();',
         );
       }
     } catch (e) {
+      _pauseRequestedByUser = false;
       debugPrint(e.toString());
     }
   }
@@ -1182,13 +1289,31 @@ abstract class VideoStoreBase with Store {
   ///
   /// Uses the native Android PiP API.
   void requestPictureInPicture() {
-    if (isCasting) return;
+    if (!canUsePictureInPicture || isCasting) return;
 
     try {
       if (Platform.isAndroid) {
-        pip.enterPipMode(autoEnter: true);
+        _enteringPictureInPicture = true;
+        _playingBeforePictureInPicture = !_paused;
+        pip.setIsPlaying(!_paused);
+        unawaited(
+          pip
+              .enterPipMode(autoEnter: true)
+              .then((enteredSuccessfully) {
+                if (enteredSuccessfully) {
+                  handleNativePictureInPictureEntered();
+                } else {
+                  _enteringPictureInPicture = false;
+                }
+              })
+              .catchError((Object e) {
+                _enteringPictureInPicture = false;
+                debugPrint(e.toString());
+              }),
+        );
       }
     } catch (e) {
+      _enteringPictureInPicture = false;
       debugPrint(e.toString());
     }
   }

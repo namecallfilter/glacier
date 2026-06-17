@@ -75,10 +75,18 @@ class GlacierCastController(
     }
 
     fun updateContext(context: CastStreamContext) {
+        val previousContext = streamContext
         streamContext = context
         updateRelay(context)
 
-        if (pendingLoad && currentSession()?.isConnected == true) {
+        if (
+            shouldLoadCurrentForContextUpdate(
+                sessionConnected = currentSession()?.isConnected == true,
+                pendingLoad = pendingLoad,
+                previous = previousContext,
+                next = context,
+            )
+        ) {
             loadCurrent()
         }
     }
@@ -291,17 +299,14 @@ class GlacierCastController(
     private fun logReceiverStatus(status: CastReceiverStatus) {
         log(
             "cast action=receiver_status " +
-                "state=${status.playerState ?: ""} " +
                 "latency_ms=${status.latencyMs ?: -1} " +
+                "seekable_latency_ms=${status.seekableLatencyMs ?: -1} " +
                 "current_sec=${status.currentTimeSec ?: -1.0} " +
                 "range_start_sec=${status.rangeStartSec ?: -1.0} " +
                 "range_end_sec=${status.rangeEndSec ?: -1.0} " +
                 "target_sec=${status.targetLatencySec ?: -1.0} " +
                 "max_sec=${status.maxLatencySec ?: -1.0} " +
-                "playback_rate=${status.playbackRate ?: -1.0} " +
-                "requested_rate=${status.requestedPlaybackRate ?: -1.0} " +
-                "correction=${status.correction ?: ""} " +
-                "latency_before_correction_ms=${status.latencyBeforeCorrectionMs ?: -1}",
+                "latency_reference=${status.latencyReference ?: ""}",
         )
     }
 
@@ -525,4 +530,21 @@ data class CastStreamContext(
     val subtitle: String?,
     val quality: String?,
     val config: StreamProxyConfig,
-)
+) {
+    fun requiresReceiverReloadFrom(previous: CastStreamContext?): Boolean {
+        if (previous == null) return false
+
+        return webViewIdentifier != previous.webViewIdentifier ||
+            channelLogin != previous.channelLogin ||
+            quality != previous.quality
+    }
+}
+
+internal fun shouldLoadCurrentForContextUpdate(
+    sessionConnected: Boolean,
+    pendingLoad: Boolean,
+    previous: CastStreamContext?,
+    next: CastStreamContext,
+): Boolean {
+    return sessionConnected && (pendingLoad || next.requiresReceiverReloadFrom(previous))
+}

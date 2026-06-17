@@ -25,342 +25,162 @@
 	<script>
 		(() => {
 			const MESSAGE_NAMESPACE = 'urn:x-cast:com.namecallfilter.glacier.cast';
-
-			const TARGET_LATENCY_SECONDS = 4.0;
-			const MAX_LATENCY_SECONDS = 8.0;
-			const EMERGENCY_LATENCY_SECONDS = 10.0;
-
 			const STATUS_INTERVAL_MS = 1000;
-			const LATENCY_CHECK_INTERVAL_MS = 500;
-			const STARTUP_LIVE_SEEK_THRESHOLD_SECONDS = TARGET_LATENCY_SECONDS + 0.5;
-			const MAX_LATENCY_SEEK_COOLDOWN_MS = 8000;
-			const MAX_LATENCY_RELOAD_COOLDOWN_MS = 15000;
-			const HIGH_LATENCY_RELOAD_TICKS = 3;
+			const TARGET_LATENCY_SECONDS = 3;
+			const MAX_LATENCY_SECONDS = 8;
 
-			const context = cast.framework.CastReceiverContext.getInstance();
-			const playerManager = context.getPlayerManager();
+			const retryParameters = {
+				maxAttempts: 4,
+				baseDelay: 1000,
+				backoffFactor: 1.5,
+				fuzzFactor: 0.1,
+			};
 
 			const playbackConfig = new cast.framework.PlaybackConfig();
-
 			playbackConfig.autoResumeNumberOfSegments = 0;
 			playbackConfig.enableSmoothLiveRefresh = false;
-			playbackConfig.segmentRequestRetryLimit = 1;
-
+			playbackConfig.segmentRequestRetryLimit = 2;
 			playbackConfig.shakaConfig = {
 				streaming: {
 					lowLatencyMode: true,
-
-					bufferingGoal: 3,
-					rebufferingGoal: 0.75,
+					bufferingGoal: 4,
+					rebufferingGoal: 1,
 					bufferBehind: 6,
-
 					updateIntervalSeconds: 0.5,
-
-					segmentPrefetchLimit: 2,
-					inaccurateManifestTolerance: 0,
+					segmentPrefetchLimit: 1,
+					inaccurateManifestTolerance: 1,
 					startAtSegmentBoundary: false,
-
 					liveSync: {
 						enabled: true,
 						targetLatency: TARGET_LATENCY_SECONDS,
-						targetLatencyTolerance: 0.25,
-
-						maxPlaybackRate: 1.1,
+						targetLatencyTolerance: 1,
+						maxPlaybackRate: 1.08,
 						minPlaybackRate: 0.98,
-
 						panicMode: true,
 						panicThreshold: MAX_LATENCY_SECONDS,
-
 						dynamicTargetLatency: {
 							enabled: true,
 							minLatency: TARGET_LATENCY_SECONDS,
 							maxLatency: MAX_LATENCY_SECONDS,
-							rebufferIncrement: 0.5,
+							rebufferIncrement: 1,
 							stabilityThreshold: 8,
 							maxAttempts: 3,
 						},
 					},
-
-					retryParameters: {
-						maxAttempts: 2,
-						baseDelay: 100,
-						backoffFactor: 1.2,
-						fuzzFactor: 0.1,
-					},
+					retryParameters,
 				},
-
 				manifest: {
 					defaultPresentationDelay: TARGET_LATENCY_SECONDS,
-
-					updatePeriod: 0.2,
-
-					retryParameters: {
-						maxAttempts: 2,
-						baseDelay: 100,
-						backoffFactor: 1.2,
-						fuzzFactor: 0.1,
-					},
-
+					updatePeriod: 0.5,
+					retryParameters,
 					hls: {
 						ignoreTextStreamFailures: true,
 					},
 				},
 			};
 
-			if (typeof playerManager.setPlaybackConfig === 'function') {
-				playerManager.setPlaybackConfig(playbackConfig);
-			}
+			const context = cast.framework.CastReceiverContext.getInstance();
+			const playerManager = context.getPlayerManager();
 
 			const finiteNumber = (value) =>
 				typeof value === 'number' && Number.isFinite(value);
 
-			let pendingStartupLiveSeek = false;
-			let lastMaxLatencySeekAtMs = 0;
-			let lastMaxLatencyReloadAtMs = 0;
-			let emergencyRecoveryActive = false;
-			let emergencyTicksAfterSeek = 0;
-			let lastLoadRequestData = null;
-
-			const logReceiverEvent = (action, fields = {}) => {
-				const details = Object.entries({action, ...fields})
-					.map(([key, value]) => `${key}=${value == null ? '' : value}`)
-					.join(' ');
-
-				console.log(`[GlacierCastReceiver] ${details}`);
-			};
-
-			const currentPlaybackRate = () => {
-				if (typeof playerManager.getPlaybackRate === 'function') {
-					const managerRate = playerManager.getPlaybackRate();
-					if (finiteNumber(managerRate) && managerRate > 0) {
-						return managerRate;
+			const mediaTimeForNow = () => {
+				if (typeof playerManager.getMediaTimeForAbsoluteTime === 'function') {
+					const mediaTime = playerManager.getMediaTimeForAbsoluteTime(Date.now() / 1000);
+					if (finiteNumber(mediaTime)) {
+						return {
+							mediaTime,
+							reference: 'absoluteLiveEdge',
+						};
 					}
 				}
 
-				const mediaElement = document.querySelector('video, audio');
-				if (mediaElement && finiteNumber(mediaElement.playbackRate)) {
-					return mediaElement.playbackRate;
+				if (typeof playerManager.getStartAbsoluteTime === 'function') {
+					const startAbsoluteTime = playerManager.getStartAbsoluteTime();
+					if (finiteNumber(startAbsoluteTime)) {
+						return {
+							mediaTime: Date.now() / 1000 - startAbsoluteTime,
+							reference: 'startAbsoluteTime',
+						};
+					}
 				}
 
-				return 1.0;
+				return null;
 			};
 
 			const liveStatus = () => {
-				const range = playerManager.getLiveSeekableRange();
-				if (!range || !finiteNumber(range.end)) return null;
+				if (typeof playerManager.getLiveSeekableRange !== 'function') return null;
+				if (typeof playerManager.getCurrentTimeSec !== 'function') return null;
 
+				const range = playerManager.getLiveSeekableRange();
 				const currentTime = playerManager.getCurrentTimeSec();
-				if (!finiteNumber(currentTime)) return null;
+
+				if (!range || !finiteNumber(range.end) || !finiteNumber(currentTime)) return null;
+
+				const seekableLatency = Math.max(0, range.end - currentTime);
+				const liveNow = mediaTimeForNow();
+				const latency = liveNow
+					? Math.max(0, liveNow.mediaTime - currentTime)
+					: seekableLatency;
 
 				return {
 					currentTime,
 					rangeStart: finiteNumber(range.start) ? range.start : null,
 					rangeEnd: range.end,
-					latency: Math.max(0, range.end - currentTime),
+					latency,
+					seekableLatency,
+					latencyReference: liveNow
+						? liveNow.reference
+						: 'liveSeekableRange',
 				};
 			};
 
-			const sendCustomMessageToAll = (message) => {
-				for (const sender of context.getSenders()) {
-					context.sendCustomMessage(MESSAGE_NAMESPACE, sender.id, message);
-				}
-			};
-
-			const sendStatus = (extra = {}) => {
+			const statusMessage = () => {
 				const status = liveStatus();
 
-				sendCustomMessageToAll({
+				return {
 					type: 'status',
-					latencyMs: status == null ? null : Math.round(status.latency * 1000),
-					playerState: playerManager.getPlayerState(),
-					currentTimeSec: status == null ? null : status.currentTime,
-					rangeStartSec: status == null ? null : status.rangeStart,
-					rangeEndSec: status == null ? null : status.rangeEnd,
+					latencyMs: status ? Math.round(status.latency * 1000) : null,
+					seekableLatencyMs: status ? Math.round(status.seekableLatency * 1000) : null,
+					currentTimeSec: status ? status.currentTime : null,
+					rangeStartSec: status ? status.rangeStart : null,
+					rangeEndSec: status ? status.rangeEnd : null,
 					targetLatencySec: TARGET_LATENCY_SECONDS,
 					maxLatencySec: MAX_LATENCY_SECONDS,
-					playbackRate: currentPlaybackRate(),
-					latencyReference: 'receiverLiveSeekableRange',
-					...extra,
-				});
+					latencyReference: status ? status.latencyReference : null,
+				};
 			};
 
-			const seekToLiveLatency = (latencySeconds) => {
-				const status = liveStatus();
-				if (!status) return false;
+			const sendStatus = (senderId = null) => {
+				const message = statusMessage();
 
-				const start = status.rangeStart == null ? 0 : status.rangeStart;
-				const targetTime = Math.max(
-					start,
-					status.rangeEnd - latencySeconds,
-				);
+				const send = (id) => {
+					try {
+						context.sendCustomMessage(MESSAGE_NAMESPACE, id, message);
+					} catch (_) { }
+				};
 
-				playerManager.seek({
-					currentTime: targetTime,
-					resumeState: cast.framework.messages.ResumeState.PLAYBACK_START,
-				});
-
-				return true;
-			};
-
-			const seekToTargetLive = () => seekToLiveLatency(TARGET_LATENCY_SECONDS);
-
-			const jumpToLive = () => {
-				const ok = seekToTargetLive();
-				sendStatus({correction: ok ? 'manualJumpToLive' : 'manualJumpFailed'});
-				return ok;
-			};
-
-			const reloadCurrentMedia = () => {
-				if (!lastLoadRequestData || typeof playerManager.load !== 'function') {
-					return false;
+				if (senderId) {
+					send(senderId);
+					return message;
 				}
 
-				lastLoadRequestData.autoplay = true;
-				pendingStartupLiveSeek = true;
+				const senders = typeof context.getSenders === 'function'
+					? context.getSenders()
+					: [];
 
-				try {
-					const loadResult = playerManager.load(lastLoadRequestData);
-					if (loadResult && typeof loadResult.catch === 'function') {
-						loadResult.catch((error) => {
-							logReceiverEvent('reload_failed', {
-								reason: error && error.name ? error.name : 'unknown',
-							});
-						});
-					}
-					return true;
-				} catch (error) {
-					logReceiverEvent('reload_failed', {
-						reason: error && error.name ? error.name : 'unknown',
-					});
-					return false;
-				}
-			};
-
-			const tryStartupLiveSeek = () => {
-				if (!pendingStartupLiveSeek) return false;
-
-				pendingStartupLiveSeek = false;
-
-				const status = liveStatus();
-				if (!status) {
-					sendStatus({correction: 'startupJumpUnavailable'});
-					return false;
+				for (const sender of senders) {
+					if (sender && sender.id) send(sender.id);
 				}
 
-				if (status.latency <= STARTUP_LIVE_SEEK_THRESHOLD_SECONDS) return false;
-
-				const ok = seekToTargetLive();
-				if (ok && status.latency > EMERGENCY_LATENCY_SECONDS) {
-					lastMaxLatencySeekAtMs = Date.now();
-					emergencyRecoveryActive = true;
-					emergencyTicksAfterSeek = 0;
-				}
-				sendStatus({
-					correction: ok ? 'startupJumpToLive' : 'startupJumpFailed',
-					latencyBeforeCorrectionMs: Math.round(status.latency * 1000),
-				});
-
-				return ok;
-			};
-
-			const enforceMaxLatencySeek = (status) => {
-				if (status.latency <= MAX_LATENCY_SECONDS) {
-					emergencyRecoveryActive = false;
-					emergencyTicksAfterSeek = 0;
-					return;
-				}
-
-				const now = Date.now();
-				const latencyBeforeCorrectionMs = Math.round(status.latency * 1000);
-				const emergency = status.latency > EMERGENCY_LATENCY_SECONDS;
-
-				logReceiverEvent('max_latency', {
-					state: playerManager.getPlayerState(),
-					latency_ms: latencyBeforeCorrectionMs,
-					max_latency_ms: Math.round(MAX_LATENCY_SECONDS * 1000),
-					target_latency_ms: Math.round(TARGET_LATENCY_SECONDS * 1000),
-					current_sec: status.currentTime,
-					range_start_sec: status.rangeStart,
-					range_end_sec: status.rangeEnd,
-					emergency,
-				});
-
-				if (emergency && emergencyRecoveryActive) {
-					emergencyTicksAfterSeek += 1;
-
-					if (emergencyTicksAfterSeek >= HIGH_LATENCY_RELOAD_TICKS) {
-						const reloadCooldownActive =
-							lastMaxLatencyReloadAtMs > 0 &&
-							now - lastMaxLatencyReloadAtMs < MAX_LATENCY_RELOAD_COOLDOWN_MS;
-
-						if (!reloadCooldownActive) {
-							lastMaxLatencyReloadAtMs = now;
-							emergencyRecoveryActive = false;
-							emergencyTicksAfterSeek = 0;
-							const ok = reloadCurrentMedia();
-
-							sendStatus({
-								correction: ok ? 'maxLatencyReload' : 'maxLatencyReloadFailed',
-								latencyBeforeCorrectionMs,
-							});
-							return;
-						}
-					}
-
-					sendStatus({
-						correction: 'maxLatencyObserved',
-						latencyBeforeCorrectionMs,
-					});
-					return;
-				}
-
-				const seekCooldownActive =
-					lastMaxLatencySeekAtMs > 0 &&
-					now - lastMaxLatencySeekAtMs < MAX_LATENCY_SEEK_COOLDOWN_MS;
-
-				if (!emergency && seekCooldownActive) {
-					sendStatus({
-						correction: 'maxLatencyObserved',
-						latencyBeforeCorrectionMs,
-					});
-					return;
-				}
-
-				lastMaxLatencySeekAtMs = now;
-				emergencyRecoveryActive = emergency;
-				emergencyTicksAfterSeek = 0;
-				const ok = seekToTargetLive();
-
-				sendStatus({
-					correction: ok ? 'maxLatencyJumpToLive' : 'maxLatencyJumpFailed',
-					latencyBeforeCorrectionMs: Math.round(status.latency * 1000),
-				});
-			};
-
-			const enforceMaxLatency = () => {
-				const state = playerManager.getPlayerState();
-				const active = state === 'PLAYING' || state === 'BUFFERING';
-
-				if (!active) return;
-
-				if (tryStartupLiveSeek()) return;
-
-				const status = liveStatus();
-				if (!status) return;
-
-				enforceMaxLatencySeek(status);
+				return message;
 			};
 
 			playerManager.setMessageInterceptor(
 				cast.framework.messages.MessageType.LOAD,
 				(loadRequestData) => {
 					const media = loadRequestData.media;
-
-					pendingStartupLiveSeek = true;
-					lastMaxLatencySeekAtMs = 0;
-					lastMaxLatencyReloadAtMs = 0;
-					emergencyRecoveryActive = false;
-					emergencyTicksAfterSeek = 0;
 
 					if (media) {
 						media.entity = media.entity || media.contentId;
@@ -370,7 +190,7 @@
 					}
 
 					loadRequestData.autoplay = true;
-					lastLoadRequestData = loadRequestData;
+					sendStatus();
 					return loadRequestData;
 				},
 			);
@@ -386,32 +206,22 @@
 					}
 				}
 
-				if (!message || typeof message !== 'object') return;
-
-				if (message.type === 'jumpToLive') {
-					const ok = jumpToLive();
-
-					context.sendCustomMessage(MESSAGE_NAMESPACE, event.senderId, {
-						type: 'jumpToLiveResult',
-						ok,
-					});
+				if (message && message.type === 'getStatus') {
+					sendStatus(event.senderId);
 				}
 			});
 
 			setInterval(sendStatus, STATUS_INTERVAL_MS);
-			setInterval(enforceMaxLatency, LATENCY_CHECK_INTERVAL_MS);
 
 			const receiverOptions = new cast.framework.CastReceiverOptions();
 			receiverOptions.disableIdleTimeout = true;
 			receiverOptions.playbackConfig = playbackConfig;
 			receiverOptions.statusText = 'Glacier';
-
 			receiverOptions.useShakaForHls = true;
 
 			context.start(receiverOptions);
 		})();
 	</script>
-
 </body>
 
 </html>

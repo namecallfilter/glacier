@@ -27,6 +27,11 @@ object HlsPlaylistRewriter {
         val selectedQuality: String?,
     )
 
+    private data class RequestedVideoQuality(
+        val height: Int,
+        val frameRate: Int?,
+    )
+
     fun parseMasterPlaylist(body: String, baseUrl: String): MasterPlaylist {
         return MasterPlaylist(parseVariants(body.lines(), baseUrl))
     }
@@ -101,16 +106,59 @@ object HlsPlaylistRewriter {
         return when (normalizedQuality) {
             null,
             "auto" -> null
-            "highest" -> variants.maxWithOrNull(
-                compareBy<Variant> { it.score ?: 0.0 }
-                    .thenBy { it.height ?: 0 }
-                    .thenBy { it.frameRate ?: 0.0 }
-                    .thenBy { it.bandwidth ?: 0L },
-            )
-            else -> variants.firstOrNull {
-                it.quality.lowercase(Locale.US) == normalizedQuality
-            }
+            "highest",
+            "source" -> highestVariant(variants)
+            else -> selectNamedVariant(variants, normalizedQuality)
         }
+    }
+
+    private fun selectNamedVariant(
+        variants: List<Variant>,
+        normalizedQuality: String,
+    ): Variant? {
+        variants.firstOrNull {
+            it.quality.lowercase(Locale.US) == normalizedQuality
+        }?.let { return it }
+
+        requestedVideoQuality(normalizedQuality)?.let { requestedQuality ->
+            variants
+                .filter { variant ->
+                    variant.height == requestedQuality.height &&
+                        (
+                            requestedQuality.frameRate == null ||
+                                variant.frameRate?.roundToInt() == requestedQuality.frameRate
+                        )
+                }
+                .maxWithOrNull(variantPreferenceComparator)
+                ?.let { return it }
+        }
+
+        val requestedQualityKey = qualityTextKey(normalizedQuality)
+        return variants.firstOrNull {
+            qualityTextKey(it.quality) == requestedQualityKey
+        }
+    }
+
+    private fun requestedVideoQuality(value: String): RequestedVideoQuality? {
+        val match = requestedVideoQualityRegex.find(value) ?: return null
+        val height = match.groupValues[1].toIntOrNull() ?: return null
+        val frameRate = match.groupValues
+            .getOrNull(2)
+            ?.takeIf(String::isNotEmpty)
+            ?.toIntOrNull()
+
+        return RequestedVideoQuality(
+            height = height,
+            frameRate = frameRate,
+        )
+    }
+
+    private fun highestVariant(variants: List<Variant>): Variant? {
+        return variants.maxWithOrNull(variantPreferenceComparator)
+    }
+
+    private fun qualityTextKey(value: String): String {
+        return value.lowercase(Locale.US).filter(Char::isLetterOrDigit)
     }
 
     private fun rewriteMediaPlaylistLine(
@@ -263,4 +311,12 @@ object HlsPlaylistRewriter {
     }
 
     private val uriAttributeRegex = Regex("""URI="([^"]+)"""")
+    private val requestedVideoQualityRegex = Regex(
+        """\b(\d{3,4})p(\d{2,3})?\b""",
+        RegexOption.IGNORE_CASE,
+    )
+    private val variantPreferenceComparator = compareBy<Variant> { it.score ?: 0.0 }
+        .thenBy { it.height ?: 0 }
+        .thenBy { it.frameRate ?: 0.0 }
+        .thenBy { it.bandwidth ?: 0L }
 }

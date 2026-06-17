@@ -9,17 +9,14 @@ object CastReceiverMessageParser {
 
         return CastReceiverStatus(
             latencyMs = latencyMs,
-            playerState = stringField(message, "playerState"),
+            seekableLatencyMs = numberField(message, "seekableLatencyMs")
+                ?.takeIf { it >= 0 },
             currentTimeSec = doubleField(message, "currentTimeSec"),
             rangeStartSec = doubleField(message, "rangeStartSec"),
             rangeEndSec = doubleField(message, "rangeEndSec"),
             targetLatencySec = doubleField(message, "targetLatencySec"),
             maxLatencySec = doubleField(message, "maxLatencySec"),
-            playbackRate = doubleField(message, "playbackRate"),
-            requestedPlaybackRate = doubleField(message, "requestedPlaybackRate"),
-            correction = stringField(message, "correction"),
-            latencyBeforeCorrectionMs = numberField(message, "latencyBeforeCorrectionMs")
-                ?.takeIf { it >= 0 },
+            latencyReference = stringField(message, "latencyReference"),
         )
     }
 
@@ -67,14 +64,11 @@ object CastReceiverMessageParser {
 
 data class CastReceiverStatus(
     val latencyMs: Long?,
-    val playerState: String?,
+    val seekableLatencyMs: Long?,
     val currentTimeSec: Double?,
     val rangeStartSec: Double?,
     val rangeEndSec: Double?,
     val targetLatencySec: Double?,
     val maxLatencySec: Double?,
-    val playbackRate: Double?,
-    val requestedPlaybackRate: Double?,
-    val correction: String?,
-    val latencyBeforeCorrectionMs: Long?,
+    val latencyReference: String?,
 )

@@ -503,6 +503,7 @@ void main() {
     );
 
     expect(find.byTooltip('Collapse pinned chat'), findsOneWidget);
+    expect(find.textContaining('SenderName'), findsOneWidget);
 
     final previewRichText = _findRichTextContaining('PartyPopper');
     expect(previewRichText.maxLines, greaterThan(1));
@@ -513,12 +514,14 @@ void main() {
 
     expect(find.byTooltip('Expand pinned chat'), findsOneWidget);
     expect(_findRichTextContaining('PartyPopper').maxLines, 1);
+    expect(find.textContaining('SenderName'), findsNothing);
 
     await tester.tap(find.byTooltip('Expand pinned chat'));
     await tester.pumpAndSettle();
 
     expect(find.byTooltip('Collapse pinned chat'), findsOneWidget);
     expect(_findRichTextContaining('PartyPopper').maxLines, greaterThan(1));
+    expect(find.textContaining('SenderName'), findsOneWidget);
   });
 
   testWidgets('starts very long pinned chats minimized', (tester) async {

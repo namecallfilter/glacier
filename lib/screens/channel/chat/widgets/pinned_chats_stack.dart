@@ -352,17 +352,19 @@ class _PinnedChatCard extends StatelessWidget {
                         height: 1.24,
                       ),
                     ),
-                    const SizedBox(height: 5),
-                    _PinnedSenderLine(
-                      pin: pin,
-                      twitchBadges: twitchBadges,
-                      launchExternal: launchExternal,
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: colorScheme.onSurfaceVariant.withValues(
-                          alpha: 0.78,
+                    if (!canToggle || isExpanded) ...[
+                      const SizedBox(height: 5),
+                      _PinnedSenderLine(
+                        pin: pin,
+                        twitchBadges: twitchBadges,
+                        launchExternal: launchExternal,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: colorScheme.onSurfaceVariant.withValues(
+                            alpha: 0.78,
+                          ),
                         ),
                       ),
-                    ),
+                    ],
                   ],
                 ),
               ),

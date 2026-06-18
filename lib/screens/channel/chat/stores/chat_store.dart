@@ -12,6 +12,7 @@ import 'package:frosty/models/irc.dart';
 import 'package:frosty/models/pinned_chat.dart';
 import 'package:frosty/screens/channel/chat/details/chat_details_store.dart';
 import 'package:frosty/screens/channel/chat/stores/chat_assets_store.dart';
+import 'package:frosty/screens/channel/chat/stores/pinned_chat_polling.dart';
 import 'package:frosty/screens/channel/chat/stores/pinned_chat_reconciliation.dart';
 import 'package:frosty/screens/settings/stores/auth_store.dart';
 import 'package:frosty/screens/settings/stores/settings_store.dart';
@@ -73,8 +74,6 @@ abstract class ChatStoreBase with Store {
   /// real bottom bar reports its measured height via [setBottomBarHeight].
   static const _baseBottomBarHeight = 68.0;
 
-  static const _pinnedChatPollInterval = Duration(seconds: 30);
-
   /// Server-initiated graceful reconnect notice. Twitch sends this untagged
   /// before maintenance so clients can re-establish ahead of the close.
   static const _serverReconnectNotice = ':tmi.twitch.tv RECONNECT';
@@ -106,6 +105,11 @@ abstract class ChatStoreBase with Store {
 
   bool get _hasActiveChatDelay =>
       settings.showVideo && _chatDelay > Duration.zero;
+
+  Duration get _pinnedChatPollInterval => pinnedChatPollInterval(
+    autoSyncChatDelay: settings.autoSyncChatDelay,
+    syncedChatDelaySeconds: settings.syncedChatDelay,
+  );
 
   final TwitchApi twitchApi;
 
@@ -194,6 +198,8 @@ abstract class ChatStoreBase with Store {
 
   /// Polls Twitch web GQL for viewer-visible pinned chat state.
   Timer? _pinnedChatPollTimer;
+
+  Duration? _activePinnedChatPollInterval;
 
   var _isFetchingPinnedChats = false;
 
@@ -425,6 +431,18 @@ abstract class ChatStoreBase with Store {
       }),
     );
 
+    reactions.add(
+      reaction((_) => _pinnedChatPollInterval, (pollInterval) {
+        if (!settings.showUserNotices ||
+            _pinnedChatPollTimer == null ||
+            _activePinnedChatPollInterval == pollInterval) {
+          return;
+        }
+
+        _startPinnedChatPolling(fetchImmediately: false);
+      }),
+    );
+
     // Start chat delay countdown when toggling video on, cancel when off
     reactions.add(
       reaction((_) => settings.showVideo, (showVideo) {
@@ -572,11 +590,15 @@ abstract class ChatStoreBase with Store {
     }
   }
 
-  void _startPinnedChatPolling() {
+  void _startPinnedChatPolling({bool fetchImmediately = true}) {
     _pinnedChatPollTimer?.cancel();
-    _fetchPinnedChats();
+    final pollInterval = _pinnedChatPollInterval;
+    _activePinnedChatPollInterval = pollInterval;
+    if (fetchImmediately) {
+      _fetchPinnedChats();
+    }
     _pinnedChatPollTimer = Timer.periodic(
-      _pinnedChatPollInterval,
+      pollInterval,
       (_) => _fetchPinnedChats(),
     );
   }
@@ -584,6 +606,7 @@ abstract class ChatStoreBase with Store {
   void _stopPinnedChatPolling({bool clearPins = false}) {
     _pinnedChatPollTimer?.cancel();
     _pinnedChatPollTimer = null;
+    _activePinnedChatPollInterval = null;
     if (clearPins) {
       runInAction(pinnedChats.clear);
     }

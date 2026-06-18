@@ -529,12 +529,115 @@ void main() {
     expect(find.byTooltip('Collapse pinned chat'), findsOneWidget);
     expect(_findRichTextContaining('M3 LINKS').maxLines, greaterThan(1));
   });
+
+  testWidgets('does not overflow in a skinny side chat width', (tester) async {
+    const longMessage =
+        'Follow up the new tiktok https://www.tiktok.com/@yuqi?_r=1&_t=ZN-97J6joaxpv0';
+
+    await tester.pumpWidget(
+      _TestApp(
+        width: 210,
+        child: PinnedChatsStack(
+          pinnedChats: [
+            _pin(
+              id: 'pin-1',
+              messageText: longMessage,
+              pinnedByDisplayName: 'Jaycondones2x',
+              senderDisplayName: 'Jaycondones2x',
+              pinnedByBadges: const [
+                PinnedChatBadge(
+                  setId: 'moderator',
+                  version: '1',
+                  title: 'Moderator',
+                  imageUrl: 'https://static.example/pinner-mod.png',
+                ),
+              ],
+              senderBadges: const [
+                PinnedChatBadge(
+                  setId: 'moderator',
+                  version: '1',
+                  title: 'Moderator',
+                  imageUrl: 'https://static.example/sender-mod.png',
+                ),
+                PinnedChatBadge(
+                  setId: 'subscriber',
+                  version: '12',
+                  title: '12-Month Subscriber',
+                  imageUrl: 'https://static.example/sender-sub.png',
+                ),
+                PinnedChatBadge(
+                  setId: 'bits',
+                  version: '1000',
+                  title: 'Cheer 1K',
+                  imageUrl: 'https://static.example/sender-bits.png',
+                ),
+              ],
+            ),
+          ],
+          launchExternal: false,
+          onDismiss: (_) {},
+        ),
+      ),
+    );
+
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('shows expanded pinned metadata without ellipses', (
+    tester,
+  ) async {
+    const longMessage =
+        'Follow up the new tiktok https://www.tiktok.com/@yuqi?_r=1&_t=ZN-97J6joaxpv0';
+
+    await tester.pumpWidget(
+      _TestApp(
+        width: 320,
+        child: PinnedChatsStack(
+          pinnedChats: [
+            _pin(
+              id: 'pin-1',
+              messageText: longMessage,
+              pinnedByDisplayName: 'Jaycondones2x',
+              senderDisplayName: 'Jaycondones2x',
+              pinnedByBadges: const [
+                PinnedChatBadge(
+                  setId: 'moderator',
+                  version: '1',
+                  title: 'Moderator',
+                  imageUrl: 'https://static.example/pinner-mod.png',
+                ),
+              ],
+              senderBadges: const [
+                PinnedChatBadge(
+                  setId: 'moderator',
+                  version: '1',
+                  title: 'Moderator',
+                  imageUrl: 'https://static.example/sender-mod.png',
+                ),
+              ],
+            ),
+          ],
+          launchExternal: false,
+          onDismiss: (_) {},
+        ),
+      ),
+    );
+
+    final metadataTexts = _findRichTextsContaining('Jaycondones2x');
+
+    expect(metadataTexts.length, greaterThanOrEqualTo(2));
+    expect(
+      metadataTexts.where((text) => text.overflow == TextOverflow.ellipsis),
+      isEmpty,
+    );
+  });
 }
 
 class _TestApp extends StatelessWidget {
   final Widget child;
+  final double width;
 
-  const _TestApp({required this.child});
+  const _TestApp({required this.child, this.width = 360});
 
   @override
   Widget build(BuildContext context) {
@@ -543,7 +646,7 @@ class _TestApp extends StatelessWidget {
       home: Scaffold(
         body: Align(
           alignment: Alignment.topCenter,
-          child: SizedBox(width: 360, child: child),
+          child: SizedBox(width: width, child: child),
         ),
       ),
     );
@@ -556,12 +659,14 @@ PinnedChatMessage _pin({
   List<PinnedChatFragment> fragments = const [],
   List<PinnedChatBadge> senderBadges = const [],
   List<PinnedChatBadge> pinnedByBadges = const [],
+  String senderDisplayName = 'SenderName',
+  String pinnedByDisplayName = 'ModName',
 }) => PinnedChatMessage(
   id: id,
   messageId: 'message-$id',
   messageText: messageText,
-  senderDisplayName: 'SenderName',
-  pinnedByDisplayName: 'ModName',
+  senderDisplayName: senderDisplayName,
+  pinnedByDisplayName: pinnedByDisplayName,
   sentAt: DateTime.parse('2026-06-18T09:40:00Z'),
   fragments: fragments,
   senderBadges: senderBadges,
@@ -605,4 +710,12 @@ RichText _findRichTextContaining(String text) {
   }
 
   throw StateError('No RichText found containing "$text"');
+}
+
+List<RichText> _findRichTextsContaining(String text) {
+  return [
+    for (final richText in find.byType(RichText).evaluate())
+      if ((richText.widget as RichText).text.toPlainText().contains(text))
+        richText.widget as RichText,
+  ];
 }

@@ -60,6 +60,7 @@ class _PinnedChatsStackState extends State<PinnedChatsStack> {
     return AnimatedSize(
       duration: const Duration(milliseconds: 160),
       curve: Curves.easeOutCubic,
+      clipBehavior: Clip.none,
       child: SizedBox(
         height: stackHeight,
         child: Stack(
@@ -122,6 +123,7 @@ class _PinnedChatCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final actionsWidth = canToggle ? 64.0 : 32.0;
     final headerStyle = theme.textTheme.labelMedium?.copyWith(
       color: colorScheme.onSurfaceVariant.withValues(alpha: 0.86),
       fontWeight: FontWeight.w700,
@@ -140,89 +142,124 @@ class _PinnedChatCard extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 9, 6, 9),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Stack(
           children: [
-            Icon(
-              Icons.push_pin_rounded,
-              size: 18,
-              color: colorScheme.onSurfaceVariant.withValues(alpha: 0.92),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Column(
+            Padding(
+              padding: EdgeInsets.only(right: actionsWidth),
+              child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _PinnedHeaderLine(
+                  Icon(
+                    Icons.push_pin_rounded,
+                    size: 18,
+                    color: colorScheme.onSurfaceVariant.withValues(alpha: 0.92),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _PinnedHeaderLine(
                           pin: pin,
                           twitchBadges: twitchBadges,
                           launchExternal: launchExternal,
                           style: headerStyle,
                         ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  _PinnedMessageText(
-                    text: pin.messageText,
-                    fragments: pin.fragments,
-                    emoteToObject: emoteToObject,
-                    launchExternal: launchExternal,
-                    breakLongLinks: isExpanded,
-                    maxLines: canToggle ? (isExpanded ? 5 : 1) : 2,
-                    overflow: canToggle && !isExpanded
-                        ? TextOverflow.ellipsis
-                        : TextOverflow.clip,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: colorScheme.onSurface,
-                      fontWeight: FontWeight.w700,
-                      height: 1.24,
-                    ),
-                  ),
-                  if (!canToggle || isExpanded) ...[
-                    const SizedBox(height: 5),
-                    _PinnedSenderLine(
-                      pin: pin,
-                      twitchBadges: twitchBadges,
-                      launchExternal: launchExternal,
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: colorScheme.onSurfaceVariant.withValues(
-                          alpha: 0.78,
+                        const SizedBox(height: 4),
+                        _PinnedMessageText(
+                          text: pin.messageText,
+                          fragments: pin.fragments,
+                          emoteToObject: emoteToObject,
+                          launchExternal: launchExternal,
+                          breakLongLinks: isExpanded,
+                          maxLines: canToggle ? (isExpanded ? 5 : 1) : 2,
+                          overflow: canToggle && !isExpanded
+                              ? TextOverflow.ellipsis
+                              : TextOverflow.clip,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: colorScheme.onSurface,
+                            fontWeight: FontWeight.w700,
+                            height: 1.24,
+                          ),
                         ),
-                      ),
+                        if (!canToggle || isExpanded) ...[
+                          const SizedBox(height: 5),
+                          _PinnedSenderLine(
+                            pin: pin,
+                            twitchBadges: twitchBadges,
+                            launchExternal: launchExternal,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: colorScheme.onSurfaceVariant.withValues(
+                                alpha: 0.78,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
-                  ],
+                  ),
                 ],
               ),
             ),
-            if (canToggle)
-              IconButton(
-                onPressed: onToggle,
-                icon: Icon(
-                  isExpanded
-                      ? Icons.keyboard_arrow_up_rounded
-                      : Icons.keyboard_arrow_down_rounded,
-                ),
-                tooltip: isExpanded
-                    ? 'Collapse pinned chat'
-                    : 'Expand pinned chat',
-                visualDensity: VisualDensity.compact,
-                iconSize: 20,
+            Positioned(
+              top: -6,
+              right: -2,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (canToggle)
+                    _PinnedIconButton(
+                      onPressed: onToggle,
+                      icon: Icon(
+                        isExpanded
+                            ? Icons.keyboard_arrow_up_rounded
+                            : Icons.keyboard_arrow_down_rounded,
+                      ),
+                      tooltip: isExpanded
+                          ? 'Collapse pinned chat'
+                          : 'Expand pinned chat',
+                      iconSize: 20,
+                    ),
+                  _PinnedIconButton(
+                    onPressed: onDismiss,
+                    icon: const Icon(Icons.close_rounded),
+                    tooltip: 'Dismiss pinned chat',
+                    iconSize: 18,
+                  ),
+                ],
               ),
-            IconButton(
-              onPressed: onDismiss,
-              icon: const Icon(Icons.close_rounded),
-              tooltip: 'Dismiss pinned chat',
-              visualDensity: VisualDensity.compact,
-              iconSize: 18,
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _PinnedIconButton extends StatelessWidget {
+  final VoidCallback onPressed;
+  final Widget icon;
+  final String tooltip;
+  final double iconSize;
+
+  const _PinnedIconButton({
+    required this.onPressed,
+    required this.icon,
+    required this.tooltip,
+    required this.iconSize,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      onPressed: onPressed,
+      icon: icon,
+      tooltip: tooltip,
+      constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+      padding: EdgeInsets.zero,
+      visualDensity: VisualDensity.compact,
+      iconSize: iconSize,
     );
   }
 }
@@ -248,33 +285,21 @@ class _PinnedHeaderLine extends StatelessWidget {
       twitchBadges,
       authorityOnly: true,
     );
-    if (badges.isEmpty) {
-      return Text(
-        'Pinned by $pinnedByName',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: style,
-      );
-    }
 
-    return Row(
-      children: [
-        Text('Pinned by ', style: style),
-        ..._pinnedBadgeWidgets(
-          context,
-          badges,
-          size: 14,
-          launchExternal: launchExternal,
-        ),
-        Flexible(
-          child: Text(
-            pinnedByName,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: style,
+    return Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(text: 'Pinned by ', style: style),
+          ..._pinnedBadgeSpans(
+            badges,
+            size: 14,
+            launchExternal: launchExternal,
           ),
-        ),
-      ],
+          TextSpan(text: pinnedByName, style: style),
+        ],
+      ),
+      overflow: TextOverflow.visible,
+      softWrap: true,
     );
   }
 }
@@ -296,32 +321,20 @@ class _PinnedSenderLine extends StatelessWidget {
   Widget build(BuildContext context) {
     final badges = _resolvedPinnedBadges(pin.senderBadges, twitchBadges);
     final text = _senderLine(pin);
-    if (badges.isEmpty) {
-      return Text(
-        text,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: style,
-      );
-    }
 
-    return Row(
-      children: [
-        ..._pinnedBadgeWidgets(
-          context,
-          badges,
-          size: 16,
-          launchExternal: launchExternal,
-        ),
-        Flexible(
-          child: Text(
-            text,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: style,
+    return Text.rich(
+      TextSpan(
+        children: [
+          ..._pinnedBadgeSpans(
+            badges,
+            size: 16,
+            launchExternal: launchExternal,
           ),
-        ),
-      ],
+          TextSpan(text: text, style: style),
+        ],
+      ),
+      overflow: TextOverflow.visible,
+      softWrap: true,
     );
   }
 
@@ -594,37 +607,59 @@ bool _isAuthorityBadgeLabel(String label) {
       label == 'broadcaster';
 }
 
-List<Widget> _pinnedBadgeWidgets(
-  BuildContext context,
+List<InlineSpan> _pinnedBadgeSpans(
   List<ChatBadge> badges, {
   required double size,
   required bool launchExternal,
 }) {
   return [
     for (final badge in badges)
-      Padding(
-        padding: const EdgeInsets.only(right: 3),
-        child: InkWell(
-          onTap: () => IRCMessage.showBadgeDetailsBottomSheet(
-            context,
+      WidgetSpan(
+        alignment: PlaceholderAlignment.middle,
+        child: Padding(
+          padding: const EdgeInsets.only(right: 3),
+          child: _PinnedBadgeButton(
             badge: badge,
+            size: size,
             launchExternal: launchExternal,
-          ),
-          child: Semantics(
-            label: badge.name,
-            button: true,
-            child: FrostyCachedNetworkImage(
-              imageUrl: badge.url,
-              width: size,
-              height: size,
-              useFade: false,
-              placeholder: (context, url) =>
-                  SizedBox(width: size, height: size),
-            ),
           ),
         ),
       ),
   ];
+}
+
+class _PinnedBadgeButton extends StatelessWidget {
+  final ChatBadge badge;
+  final double size;
+  final bool launchExternal;
+
+  const _PinnedBadgeButton({
+    required this.badge,
+    required this.size,
+    required this.launchExternal,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () => IRCMessage.showBadgeDetailsBottomSheet(
+        context,
+        badge: badge,
+        launchExternal: launchExternal,
+      ),
+      child: Semantics(
+        label: badge.name,
+        button: true,
+        child: FrostyCachedNetworkImage(
+          imageUrl: badge.url,
+          width: size,
+          height: size,
+          useFade: false,
+          placeholder: (context, url) => SizedBox(width: size, height: size),
+        ),
+      ),
+    );
+  }
 }
 
 bool _canTogglePinnedChat(String text) =>

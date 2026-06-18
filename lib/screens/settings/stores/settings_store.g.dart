@@ -68,7 +68,9 @@ SettingsStore _$SettingsStoreFromJson(
   ..chatDelay = (json['chatDelay'] as num?)?.toDouble() ?? 0.0
   ..highlightFirstTimeChatter =
       json['highlightFirstTimeChatter'] as bool? ?? true
-  ..showUserNotices = json['showUserNotices'] as bool? ?? true
+  ..showPinnedChats = json['showPinnedChats'] as bool? ?? true
+  ..showChatNotices = json['showChatNotices'] as bool? ?? true
+  ..showHighlightedMessages = json['showHighlightedMessages'] as bool? ?? true
   ..emoteMenuButtonOnLeft = json['emoteMenuButtonOnLeft'] as bool? ?? false
   ..landscapeChatLeftSide = json['landscapeChatLeftSide'] as bool? ?? false
   ..landscapeForceVerticalChat =
@@ -144,7 +146,9 @@ Map<String, dynamic> _$SettingsStoreToJson(
   'autoSyncChatDelay': instance.autoSyncChatDelay,
   'chatDelay': instance.chatDelay,
   'highlightFirstTimeChatter': instance.highlightFirstTimeChatter,
-  'showUserNotices': instance.showUserNotices,
+  'showPinnedChats': instance.showPinnedChats,
+  'showChatNotices': instance.showChatNotices,
+  'showHighlightedMessages': instance.showHighlightedMessages,
   'emoteMenuButtonOnLeft': instance.emoteMenuButtonOnLeft,
   'landscapeChatLeftSide': instance.landscapeChatLeftSide,
   'landscapeForceVerticalChat': instance.landscapeForceVerticalChat,
@@ -803,22 +807,62 @@ mixin _$SettingsStore on _SettingsStoreBase, Store {
     );
   }
 
-  late final _$showUserNoticesAtom = Atom(
-    name: '_SettingsStoreBase.showUserNotices',
+  late final _$showPinnedChatsAtom = Atom(
+    name: '_SettingsStoreBase.showPinnedChats',
     context: context,
   );
 
   @override
-  bool get showUserNotices {
-    _$showUserNoticesAtom.reportRead();
-    return super.showUserNotices;
+  bool get showPinnedChats {
+    _$showPinnedChatsAtom.reportRead();
+    return super.showPinnedChats;
   }
 
   @override
-  set showUserNotices(bool value) {
-    _$showUserNoticesAtom.reportWrite(value, super.showUserNotices, () {
-      super.showUserNotices = value;
+  set showPinnedChats(bool value) {
+    _$showPinnedChatsAtom.reportWrite(value, super.showPinnedChats, () {
+      super.showPinnedChats = value;
     });
+  }
+
+  late final _$showChatNoticesAtom = Atom(
+    name: '_SettingsStoreBase.showChatNotices',
+    context: context,
+  );
+
+  @override
+  bool get showChatNotices {
+    _$showChatNoticesAtom.reportRead();
+    return super.showChatNotices;
+  }
+
+  @override
+  set showChatNotices(bool value) {
+    _$showChatNoticesAtom.reportWrite(value, super.showChatNotices, () {
+      super.showChatNotices = value;
+    });
+  }
+
+  late final _$showHighlightedMessagesAtom = Atom(
+    name: '_SettingsStoreBase.showHighlightedMessages',
+    context: context,
+  );
+
+  @override
+  bool get showHighlightedMessages {
+    _$showHighlightedMessagesAtom.reportRead();
+    return super.showHighlightedMessages;
+  }
+
+  @override
+  set showHighlightedMessages(bool value) {
+    _$showHighlightedMessagesAtom.reportWrite(
+      value,
+      super.showHighlightedMessages,
+      () {
+        super.showHighlightedMessages = value;
+      },
+    );
   }
 
   late final _$emoteMenuButtonOnLeftAtom = Atom(
@@ -1336,7 +1380,9 @@ autoSyncChatDelay: ${autoSyncChatDelay},
 chatDelay: ${chatDelay},
 syncedChatDelay: ${syncedChatDelay},
 highlightFirstTimeChatter: ${highlightFirstTimeChatter},
-showUserNotices: ${showUserNotices},
+showPinnedChats: ${showPinnedChats},
+showChatNotices: ${showChatNotices},
+showHighlightedMessages: ${showHighlightedMessages},
 emoteMenuButtonOnLeft: ${emoteMenuButtonOnLeft},
 landscapeChatLeftSide: ${landscapeChatLeftSide},
 landscapeForceVerticalChat: ${landscapeForceVerticalChat},

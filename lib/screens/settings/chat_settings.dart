@@ -240,12 +240,29 @@ class ChatSettings extends StatelessWidget {
                 settingsStore.highlightFirstTimeChatter = newValue,
           ),
           SettingsListSwitch(
-            title: 'Show notices',
+            title: 'Show pinned chats',
+            subtitle: const Text(
+              'Shows the sticky pinned message card at the top of chat.',
+            ),
+            value: settingsStore.showPinnedChats,
+            onChanged: (newValue) => settingsStore.showPinnedChats = newValue,
+          ),
+          SettingsListSwitch(
+            title: 'Show chat notices',
             subtitle: const Text(
               'Shows notices such as subs, announcements, and raids.',
             ),
-            value: settingsStore.showUserNotices,
-            onChanged: (newValue) => settingsStore.showUserNotices = newValue,
+            value: settingsStore.showChatNotices,
+            onChanged: (newValue) => settingsStore.showChatNotices = newValue,
+          ),
+          SettingsListSwitch(
+            title: 'Show highlighted messages',
+            subtitle: const Text(
+              'Shows the highlighted-message alert treatment in chat.',
+            ),
+            value: settingsStore.showHighlightedMessages,
+            onChanged: (newValue) =>
+                settingsStore.showHighlightedMessages = newValue,
           ),
           const SectionHeader('Layout'),
           SettingsListSwitch(

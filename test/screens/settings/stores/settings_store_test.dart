@@ -36,7 +36,9 @@ void main() {
       expect(store.syncedChatDelay, 0.0);
       expect(store.effectiveChatDelay, 0.0);
       expect(store.highlightFirstTimeChatter, isTrue);
-      expect(store.showUserNotices, isTrue);
+      expect(store.showPinnedChats, isTrue);
+      expect(store.showChatNotices, isTrue);
+      expect(store.showHighlightedMessages, isTrue);
       expect(store.emoteMenuButtonOnLeft, isFalse);
       expect(store.landscapeChatLeftSide, isFalse);
       expect(store.landscapeForceVerticalChat, isFalse);
@@ -81,6 +83,9 @@ void main() {
       ];
       store.streamProxyWhitelistedChannels = ['streamer_name123'];
       store.timestampType = TimestampType.twelve;
+      store.showPinnedChats = false;
+      store.showChatNotices = false;
+      store.showHighlightedMessages = false;
       store.landscapeCutout = LandscapeCutoutType.both;
       store.mutedWords = ['spam', 'bad'];
       store.pinnedChannelIds = ['ch1', 'ch2'];
@@ -106,6 +111,10 @@ void main() {
       ]);
       expect(restored.streamProxyWhitelistedChannels, ['streamer_name123']);
       expect(restored.timestampType, TimestampType.twelve);
+      expect(restored.showPinnedChats, isFalse);
+      expect(restored.showChatNotices, isFalse);
+      expect(restored.showHighlightedMessages, isFalse);
+      expect(json.containsKey('showUserNotices'), isFalse);
       expect(restored.landscapeCutout, LandscapeCutoutType.both);
       expect(restored.mutedWords, ['spam', 'bad']);
       expect(restored.pinnedChannelIds, ['ch1', 'ch2']);
@@ -128,6 +137,27 @@ void main() {
         'streamProxyMode': 'nonexistent_proxy_mode',
       });
       expect(store.streamProxyMode, StreamProxyMode.off);
+    });
+
+    test('legacy disabled user notices disables split notice settings', () {
+      final store = SettingsStore.fromJson({'showUserNotices': false});
+
+      expect(store.showPinnedChats, isFalse);
+      expect(store.showChatNotices, isFalse);
+      expect(store.showHighlightedMessages, isFalse);
+    });
+
+    test('split notice settings override legacy user notices', () {
+      final store = SettingsStore.fromJson({
+        'showUserNotices': false,
+        'showPinnedChats': true,
+        'showChatNotices': false,
+        'showHighlightedMessages': true,
+      });
+
+      expect(store.showPinnedChats, isTrue);
+      expect(store.showChatNotices, isFalse);
+      expect(store.showHighlightedMessages, isTrue);
     });
   });
 
@@ -195,6 +225,9 @@ void main() {
       store.landscapeCutout = LandscapeCutoutType.right;
       store.chatWidth = 0.5;
       store.mutedWords = ['word1'];
+      store.showPinnedChats = false;
+      store.showChatNotices = false;
+      store.showHighlightedMessages = false;
       store.showBTTVEmotes = false;
       store.showFFZBadges = false;
 
@@ -211,6 +244,9 @@ void main() {
       expect(store.landscapeCutout, LandscapeCutoutType.none);
       expect(store.chatWidth, 0.2);
       expect(store.mutedWords, isEmpty);
+      expect(store.showPinnedChats, isTrue);
+      expect(store.showChatNotices, isTrue);
+      expect(store.showHighlightedMessages, isTrue);
       expect(store.showBTTVEmotes, isTrue);
       expect(store.showFFZBadges, isTrue);
     });

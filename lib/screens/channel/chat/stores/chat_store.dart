@@ -422,8 +422,8 @@ abstract class ChatStoreBase with Store {
     );
 
     reactions.add(
-      reaction((_) => settings.showUserNotices, (showUserNotices) {
-        if (showUserNotices) {
+      reaction((_) => settings.showPinnedChats, (showPinnedChats) {
+        if (showPinnedChats) {
           _startPinnedChatPolling();
         } else {
           _stopPinnedChatPolling(clearPins: true);
@@ -433,7 +433,7 @@ abstract class ChatStoreBase with Store {
 
     reactions.add(
       reaction((_) => _pinnedChatPollInterval, (pollInterval) {
-        if (!settings.showUserNotices ||
+        if (!settings.showPinnedChats ||
             _pinnedChatPollTimer == null ||
             _activePinnedChatPollInterval == pollInterval) {
           return;
@@ -475,7 +475,7 @@ abstract class ChatStoreBase with Store {
 
     assetsStore.init();
 
-    if (settings.showUserNotices) {
+    if (settings.showPinnedChats) {
       _startPinnedChatPolling();
     }
 
@@ -615,7 +615,7 @@ abstract class ChatStoreBase with Store {
   Future<void> refreshPinnedChats() => _fetchPinnedChats();
 
   Future<void> _fetchPinnedChats() async {
-    if (_isFetchingPinnedChats || !settings.showUserNotices) return;
+    if (_isFetchingPinnedChats || !settings.showPinnedChats) return;
     _isFetchingPinnedChats = true;
 
     try {

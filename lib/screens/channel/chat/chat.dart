@@ -87,7 +87,7 @@ class Chat extends StatelessWidget {
                                 ? chatTabsStore!.mergedScrollController
                                 : chatStore.scrollController;
                             final showPinnedChats =
-                                chatStore.settings.showUserNotices &&
+                                chatStore.settings.showPinnedChats &&
                                 chatStore.pinnedChats.isNotEmpty;
                             final pinnedChatsHeight = showPinnedChats
                                 ? PinnedChatsStack.topOffset +
@@ -228,7 +228,7 @@ class Chat extends StatelessWidget {
 
         return Observer(
           builder: (_) {
-            if (!chatStore.settings.showUserNotices ||
+            if (!chatStore.settings.showPinnedChats ||
                 chatStore.pinnedChats.isEmpty) {
               return const SizedBox.shrink();
             }

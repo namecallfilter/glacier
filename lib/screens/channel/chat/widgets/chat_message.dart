@@ -226,7 +226,7 @@ class ChatMessage extends StatelessWidget {
                 chatStore.settings.highlightFirstTimeChatter &&
                 ircMessage.tags['first-msg'] == '1';
             final shouldHighlightMessage =
-                chatStore.settings.showUserNotices &&
+                chatStore.settings.showHighlightedMessages &&
                 ircMessage.tags['msg-id'] == 'highlighted-message';
 
             final messageSpan = Text.rich(
@@ -454,7 +454,7 @@ class ChatMessage extends StatelessWidget {
             }
             break;
           case Command.userNotice:
-            if (chatStore.settings.showUserNotices) {
+            if (chatStore.settings.showChatNotices) {
               highlightColor = context.frostyColors.highlightedMessage;
               Widget? messageHeaderIcon;
               Widget? messageHeader;

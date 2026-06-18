@@ -48,9 +48,8 @@ class _PinnedChatsStackState extends State<PinnedChatsStack> {
     if (widget.pinnedChats.isEmpty) return const SizedBox.shrink();
 
     final topPin = widget.pinnedChats.first;
-    final startsMinimized = _shouldStartMinimized(topPin.messageText);
     final isToggled = _toggledPinIds.contains(topPin.id);
-    final isTopPinExpanded = startsMinimized ? isToggled : !isToggled;
+    final isTopPinExpanded = !isToggled;
     final stackHeight = isTopPinExpanded
         ? PinnedChatsStack.expandedHeight
         : PinnedChatsStack.collapsedHeight;
@@ -698,10 +697,6 @@ class _PinnedBadgeButton extends StatelessWidget {
       ),
     );
   }
-}
-
-bool _shouldStartMinimized(String text) {
-  return text.length > 92 || text.contains('\n');
 }
 
 Color _pinnedSurfaceColor(BuildContext context) {

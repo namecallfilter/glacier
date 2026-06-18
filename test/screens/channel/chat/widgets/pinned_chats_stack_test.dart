@@ -539,7 +539,9 @@ void main() {
     expect(find.textContaining('SenderName'), findsOneWidget);
   });
 
-  testWidgets('starts very long pinned chats minimized', (tester) async {
+  testWidgets('starts very long pinned chats expanded and toggles minimized', (
+    tester,
+  ) async {
     const longMessage =
         'M3 LINKS -> Discord: discord.gg/mar3lg | X: x.com/communities/1926380245063520455 | Snapchat: https://www.snapchat.com/add/marlonluga | YouTube: youtube.com/@mar3lg';
 
@@ -553,16 +555,18 @@ void main() {
       ),
     );
 
-    expect(find.byTooltip('Expand pinned chat'), findsOneWidget);
-    expect(_findRichTextContaining('M3 LINKS').maxLines, 1);
-
-    if (find.byTooltip('Expand pinned chat').evaluate().isNotEmpty) {
-      await tester.tap(find.byTooltip('Expand pinned chat'));
-      await tester.pumpAndSettle();
-    }
-
     expect(find.byTooltip('Collapse pinned chat'), findsOneWidget);
+    expect(find.byTooltip('Expand pinned chat'), findsNothing);
     expect(_findRichTextContaining('M3 LINKS').maxLines, greaterThan(1));
+    expect(find.textContaining('SenderName'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Collapse pinned chat'));
+    await tester.pumpAndSettle();
+
+    expect(find.byTooltip('Expand pinned chat'), findsOneWidget);
+    expect(find.byTooltip('Collapse pinned chat'), findsNothing);
+    expect(_findRichTextContaining('M3 LINKS').maxLines, 1);
+    expect(find.textContaining('SenderName'), findsNothing);
   });
 
   testWidgets('does not overflow in a skinny side chat width', (tester) async {

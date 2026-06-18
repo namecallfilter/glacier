@@ -435,7 +435,11 @@ class _PinnedHeaderLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pinnedByName = pin.pinnedByDisplayName ?? 'moderator';
-    final badges = _resolvedPinnedBadges(pin.pinnedByBadges, twitchBadges);
+    final badges = _resolvedPinnedBadges(
+      pin.pinnedByBadges,
+      twitchBadges,
+      authorityOnly: true,
+    );
     if (badges.isEmpty) {
       return Text(
         'Pinned by $pinnedByName',
@@ -689,12 +693,41 @@ class _PinnedEmoteSpan extends WidgetSpan {
 
 List<ChatBadge> _resolvedPinnedBadges(
   List<PinnedChatBadge> badges,
-  Map<String, ChatBadge> twitchBadges,
-) {
-  return badges
-      .map((badge) => badge.resolve(twitchBadges))
-      .whereType<ChatBadge>()
-      .toList();
+  Map<String, ChatBadge> twitchBadges, {
+  bool authorityOnly = false,
+}) {
+  final resolvedBadges = <ChatBadge>[];
+
+  for (final badge in badges) {
+    final resolvedBadge = badge.resolve(twitchBadges);
+    if (resolvedBadge == null) continue;
+    if (authorityOnly && !_isPinnedByAuthorityBadge(badge, resolvedBadge)) {
+      continue;
+    }
+
+    resolvedBadges.add(resolvedBadge);
+  }
+
+  return resolvedBadges;
+}
+
+bool _isPinnedByAuthorityBadge(PinnedChatBadge badge, ChatBadge resolvedBadge) {
+  return [
+    badge.setId,
+    badge.title,
+    resolvedBadge.name,
+  ].map(_normalizeBadgeLabel).any(_isAuthorityBadgeLabel);
+}
+
+String _normalizeBadgeLabel(String label) {
+  return label.toLowerCase().replaceAll(RegExp(r'[\s_\-/]'), '');
+}
+
+bool _isAuthorityBadgeLabel(String label) {
+  return label == 'moderator' ||
+      label == 'headmod' ||
+      label == 'headmoderator' ||
+      label == 'broadcaster';
 }
 
 List<Widget> _pinnedBadgeWidgets(

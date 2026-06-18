@@ -198,6 +198,89 @@ void main() {
     );
   });
 
+  testWidgets('filters pinned-by badges but keeps all sender badges', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _TestApp(
+        child: PinnedChatsStack(
+          pinnedChats: [
+            _pin(
+              id: 'pin-1',
+              messageText: 'Pinned message',
+              pinnedByBadges: const [
+                PinnedChatBadge(
+                  setId: 'moderator',
+                  version: '1',
+                  title: 'Moderator',
+                  imageUrl: 'https://static.example/pinner-mod.png',
+                ),
+                PinnedChatBadge(
+                  setId: 'head-moderator',
+                  version: '1',
+                  title: 'Head Mod',
+                  imageUrl: 'https://static.example/pinner-head-mod.png',
+                ),
+                PinnedChatBadge(
+                  setId: 'broadcaster',
+                  version: '1',
+                  title: 'Broadcaster',
+                  imageUrl: 'https://static.example/pinner-broadcaster.png',
+                ),
+                PinnedChatBadge(
+                  setId: 'subscriber',
+                  version: '12',
+                  title: '12-Month Subscriber',
+                  imageUrl: 'https://static.example/pinner-sub.png',
+                ),
+              ],
+              senderBadges: const [
+                PinnedChatBadge(
+                  setId: 'subscriber',
+                  version: '12',
+                  title: '12-Month Subscriber',
+                  imageUrl: 'https://static.example/sender-sub.png',
+                ),
+                PinnedChatBadge(
+                  setId: 'vip',
+                  version: '1',
+                  title: 'VIP',
+                  imageUrl: 'https://static.example/sender-vip.png',
+                ),
+                PinnedChatBadge(
+                  setId: 'bits',
+                  version: '1000',
+                  title: 'Cheer 1K',
+                  imageUrl: 'https://static.example/sender-bits.png',
+                ),
+              ],
+            ),
+          ],
+          launchExternal: false,
+          onDismiss: (_) {},
+          onDismissMany: (_) {},
+        ),
+      ),
+    );
+
+    expect(_findImage('https://static.example/pinner-mod.png'), findsOneWidget);
+    expect(
+      _findImage('https://static.example/pinner-head-mod.png'),
+      findsOneWidget,
+    );
+    expect(
+      _findImage('https://static.example/pinner-broadcaster.png'),
+      findsOneWidget,
+    );
+    expect(_findImage('https://static.example/pinner-sub.png'), findsNothing);
+    expect(_findImage('https://static.example/sender-sub.png'), findsOneWidget);
+    expect(_findImage('https://static.example/sender-vip.png'), findsOneWidget);
+    expect(
+      _findImage('https://static.example/sender-bits.png'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('opens emote details from pinned chat emotes', (tester) async {
     await tester.pumpWidget(
       _TestApp(

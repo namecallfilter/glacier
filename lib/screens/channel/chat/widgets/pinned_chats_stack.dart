@@ -234,16 +234,16 @@ class _PinnedLayerCard extends StatelessWidget {
       child: Container(
         height: 70,
         decoration: BoxDecoration(
-          color: _pinnedSurfaceColor(context, emphasis: 0.75),
+          color: _pinnedSurfaceColor(context),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: colorScheme.outlineVariant.withValues(alpha: 0.45),
+            color: colorScheme.outlineVariant.withValues(alpha: 0.68),
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.10),
-              blurRadius: 10,
-              offset: const Offset(0, 3),
+              color: Colors.black.withValues(alpha: 0.22),
+              blurRadius: 14,
+              offset: const Offset(0, 5),
             ),
           ],
         ),
@@ -284,12 +284,12 @@ class _PinnedChatCard extends StatelessWidget {
 
     return Material(
       color: _pinnedSurfaceColor(context),
-      elevation: 2,
-      shadowColor: Colors.black.withValues(alpha: 0.14),
+      elevation: 5,
+      shadowColor: Colors.black.withValues(alpha: 0.32),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
         side: BorderSide(
-          color: colorScheme.outlineVariant.withValues(alpha: 0.55),
+          color: colorScheme.outlineVariant.withValues(alpha: 0.78),
         ),
       ),
       clipBehavior: Clip.antiAlias,
@@ -531,18 +531,12 @@ bool _shouldStartMinimized(String text) {
   return text.length > 92 || text.contains('\n');
 }
 
-Color _pinnedSurfaceColor(BuildContext context, {double emphasis = 1}) {
+Color _pinnedSurfaceColor(BuildContext context) {
   final theme = Theme.of(context);
   final colorScheme = theme.colorScheme;
-  final background = theme.scaffoldBackgroundColor.a == 0
+  return theme.scaffoldBackgroundColor.a == 0
       ? colorScheme.surface
       : theme.scaffoldBackgroundColor;
-  final alpha = theme.brightness == Brightness.dark ? 0.12 : 0.05;
-
-  return Color.alphaBlend(
-    colorScheme.onSurface.withValues(alpha: alpha * emphasis),
-    background,
-  );
 }
 
 String _trimTrailingLinkPunctuation(String link) {

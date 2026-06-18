@@ -110,6 +110,36 @@ void main() {
     expect(launchArguments['useWebView'], isTrue);
   });
 
+  testWidgets('uses chat background with border and shadow', (tester) async {
+    await tester.pumpWidget(
+      _TestApp(
+        child: PinnedChatsStack(
+          pinnedChats: [_pin(id: 'pin-1', messageText: 'Pinned message')],
+          launchExternal: false,
+          onDismiss: (_) {},
+          onDismissMany: (_) {},
+        ),
+      ),
+    );
+
+    final theme = Theme.of(tester.element(find.byType(PinnedChatsStack)));
+    final cardMaterial = tester
+        .widgetList<Material>(
+          find.descendant(
+            of: find.byType(PinnedChatsStack),
+            matching: find.byType(Material),
+          ),
+        )
+        .firstWhere((material) => material.shape is RoundedRectangleBorder);
+    final cardShape = cardMaterial.shape! as RoundedRectangleBorder;
+
+    expect(cardMaterial.color, theme.scaffoldBackgroundColor);
+    expect(cardMaterial.elevation, greaterThan(0));
+    expect(cardMaterial.shadowColor, isNot(theme.scaffoldBackgroundColor));
+    expect(cardShape.side.width, greaterThan(0));
+    expect(cardShape.side.color, isNot(theme.scaffoldBackgroundColor));
+  });
+
   testWidgets('styles https scheme as part of pinned chat links', (
     tester,
   ) async {

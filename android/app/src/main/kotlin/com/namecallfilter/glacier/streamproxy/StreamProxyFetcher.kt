@@ -141,11 +141,13 @@ class StreamProxyFetcher(
         var connection: HttpURLConnection? = null
 
         return try {
-            log(
-                "matched type=${decision.requestType.logName} " +
-                    "channel=${decision.channel ?: ""} action=direct_fallback " +
-                    "reason=$reason",
-            )
+            if (shouldLogDirectFallback(reason)) {
+                log(
+                    "matched type=${decision.requestType.logName} " +
+                        "channel=${decision.channel ?: ""} action=direct_fallback " +
+                        "reason=$reason",
+                )
+            }
             connection = URL(request.url).openConnection() as HttpURLConnection
             val activeConnection = connection!!
             activeConnection.connectTimeout = CONNECT_TIMEOUT_MS
@@ -583,6 +585,12 @@ class StreamProxyFetcher(
                 ?.let { ":$it" }
                 ?: ""
             return "${error.javaClass.simpleName}$message"
+        }
+
+        private fun shouldLogDirectFallback(reason: String): Boolean {
+            return reason != "unknown" &&
+                reason != "optimized_unflagged" &&
+                reason != "optimized_already_proxied"
         }
     }
 

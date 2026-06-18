@@ -4,6 +4,17 @@ import 'package:frosty/services/stream_proxy_config.dart';
 
 void main() {
   group('StreamProxyConfig', () {
+    test('debug logging is off by default', () {
+      final config = StreamProxyConfig(
+        mode: StreamProxyMode.ttvLolPro,
+        currentChannelLogin: 'streamer',
+        proxyUrls: const [],
+        whitelistedChannels: const [],
+      );
+
+      expect(config.toMethodChannelPayload()['debugLogging'], isFalse);
+    });
+
     test('toMethodChannelPayload serializes settings for Android bridge', () {
       final config = StreamProxyConfig(
         mode: StreamProxyMode.ttvLolPro,
@@ -13,7 +24,6 @@ void main() {
           'https://user:pass@proxy.example.com:443',
         ],
         whitelistedChannels: const ['Whitelisted_Channel'],
-        debugLogging: false,
       );
 
       expect(config.toMethodChannelPayload(), {

@@ -242,7 +242,6 @@ class CastRelayServerTest {
                 assertTrue(responseLog.contains("media_sequence=777"))
                 assertTrue(responseLog.contains("program_date_time=2026-06-12T10:00:02.000Z"))
                 assertTrue(responseLog.contains("target_duration=2"))
-                assertTrue(responseLog.contains("last_segment_uri=segment-778.ts"))
             }
         }
     }

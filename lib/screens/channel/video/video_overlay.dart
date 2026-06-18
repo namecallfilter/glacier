@@ -484,21 +484,27 @@ class VideoOverlay extends StatelessWidget {
                                         builder: (context, castState, _) {
                                           final castLatency =
                                               castState.formattedLatency;
+                                          final latencyStyle = TextStyle(
+                                            color: surfaceColor,
+                                            fontWeight: FontWeight.w500,
+                                            fontFeatures: const [
+                                              FontFeature.tabularFigures(),
+                                            ],
+                                            shadows: kOverlayShadow,
+                                          );
+
+                                          if (castState.isCasting &&
+                                              castLatency != null) {
+                                            return Text(
+                                              castLatency,
+                                              style: latencyStyle,
+                                            );
+                                          }
 
                                           return Observer(
                                             builder: (context) => Text(
-                                              castState.isCasting &&
-                                                      castLatency != null
-                                                  ? castLatency
-                                                  : videoStore.latency ?? '—',
-                                              style: TextStyle(
-                                                color: surfaceColor,
-                                                fontWeight: FontWeight.w500,
-                                                fontFeatures: const [
-                                                  FontFeature.tabularFigures(),
-                                                ],
-                                                shadows: kOverlayShadow,
-                                              ),
+                                              videoStore.latency ?? '—',
+                                              style: latencyStyle,
                                             ),
                                           );
                                         },

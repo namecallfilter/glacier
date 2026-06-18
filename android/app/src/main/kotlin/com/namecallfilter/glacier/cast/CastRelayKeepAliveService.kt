@@ -11,7 +11,6 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
-import android.util.Log
 import com.namecallfilter.glacier.R
 
 class CastRelayKeepAliveService : Service() {
@@ -28,13 +27,11 @@ class CastRelayKeepAliveService : Service() {
 
         startForegroundCompat()
         acquireLocks()
-        Log.d(LOG_TAG, "cast_keep_alive action=started")
         return START_STICKY
     }
 
     override fun onDestroy() {
         releaseLocks()
-        Log.d(LOG_TAG, "cast_keep_alive action=stopped")
         super.onDestroy()
     }
 
@@ -131,7 +128,6 @@ class CastRelayKeepAliveService : Service() {
         private const val ACTION_STOP = "com.namecallfilter.glacier.cast.STOP_RELAY_KEEP_ALIVE"
         private const val CHANNEL_ID = "glacier_cast_relay"
         private const val NOTIFICATION_ID = 5312
-        private const val LOG_TAG = "GlacierCast"
 
         fun start(context: Context) {
             val intent = Intent(context, CastRelayKeepAliveService::class.java)

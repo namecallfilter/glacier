@@ -26,29 +26,27 @@ class DioClient {
       persistentConnection: true, // Enable connection pooling
     );
 
-    // Simple logging for debug builds
+    // Log only responses that may need investigation.
     if (kDebugMode) {
       dio.interceptors.add(
         InterceptorsWrapper(
-          onRequest: (options, handler) {
-            debugPrint('→ ${options.method} ${options.uri}');
-            handler.next(options);
-          },
           onResponse: (response, handler) {
             final statusCode = response.statusCode ?? 0;
-            final emoji = statusCode >= 200 && statusCode < 300 ? '✅' : '❌';
-            debugPrint(
-              '$emoji ${response.statusCode} ${response.requestOptions.method} ${response.requestOptions.uri}',
-            );
+            if (statusCode < 200 || statusCode >= 300) {
+              debugPrint(
+                'HTTP $statusCode ${response.requestOptions.method} '
+                '${response.requestOptions.uri}',
+              );
+            }
             handler.next(response);
           },
           onError: (error, handler) {
+            final status = error.response?.statusCode;
+            final statusText = status == null ? '' : ' status=$status';
             debugPrint(
-              '❌ ${error.type.name} ${error.requestOptions.method} ${error.requestOptions.uri}',
+              'HTTP ${error.type.name}$statusText '
+              '${error.requestOptions.method} ${error.requestOptions.uri}',
             );
-            if (error.response != null) {
-              debugPrint('   Status: ${error.response!.statusCode}');
-            }
             handler.next(error);
           },
         ),

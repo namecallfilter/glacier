@@ -82,6 +82,31 @@ class PinnedChatMessage {
     final pinnedBy = _asMap(node['pinnedBy']);
     final fragments = _extractFragments(pinnedMessage);
     final messageText = _extractMessageText(pinnedMessage, fragments);
+    final senderBadges = _extractFirstBadges([
+      pinnedMessage['badges'],
+      pinnedMessage['displayBadges'],
+      pinnedMessage['chatBadges'],
+      pinnedMessage['badgeInfo'],
+      pinnedMessage['senderBadges'],
+      sender?['badges'],
+      sender?['displayBadges'],
+      sender?['chatBadges'],
+      sender?['badgeInfo'],
+    ]);
+    final directPinnedByBadges = _extractFirstBadges([
+      pinnedBy?['badges'],
+      pinnedBy?['displayBadges'],
+      pinnedBy?['chatBadges'],
+      pinnedBy?['badgeInfo'],
+    ]);
+    final pinnedByBadges = directPinnedByBadges.isNotEmpty
+        ? directPinnedByBadges
+        : _inferPinnedByBadges(
+            node: node,
+            pinnedBy: pinnedBy,
+            sender: sender,
+            senderBadges: senderBadges,
+          );
     final senderDisplayName =
         _asString(sender?['displayName']) ??
         _asString(sender?['display_name']) ??
@@ -96,9 +121,7 @@ class PinnedChatMessage {
       senderLogin:
           _asString(sender?['login']) ?? _asString(sender?['userLogin']),
       senderDisplayName: senderDisplayName,
-      senderBadges: _extractBadges(pinnedMessage['badges']).isNotEmpty
-          ? _extractBadges(pinnedMessage['badges'])
-          : _extractBadges(sender?['badges']),
+      senderBadges: senderBadges,
       fragments: fragments,
       pinnedById: _asString(pinnedBy?['id']),
       pinnedByLogin:
@@ -106,7 +129,7 @@ class PinnedChatMessage {
       pinnedByDisplayName:
           _asString(pinnedBy?['displayName']) ??
           _asString(pinnedBy?['display_name']),
-      pinnedByBadges: _extractBadges(pinnedBy?['badges']),
+      pinnedByBadges: pinnedByBadges,
       startsAt: _parseDate(node['startsAt']),
       updatedAt: _parseDate(node['updatedAt']),
       endsAt: _parseDate(node['endsAt']),
@@ -183,29 +206,168 @@ class PinnedChatMessage {
     return null;
   }
 
-  static List<PinnedChatBadge> _extractBadges(Object? value) {
-    final badges = _asList(value);
-    if (badges == null) return const [];
+  static List<PinnedChatBadge> _extractFirstBadges(Iterable<Object?> values) {
+    for (final value in values) {
+      final badges = _extractBadges(value);
+      if (badges.isNotEmpty) return badges;
+    }
 
-    return badges
-        .map(_asMap)
-        .whereType<Map<String, dynamic>>()
-        .map(_parseBadge)
-        .whereType<PinnedChatBadge>()
-        .toList();
+    return const [];
+  }
+
+  static List<PinnedChatBadge> _extractBadges(Object? value) {
+    final list = _asList(value);
+    if (list != null) {
+      return _dedupeBadges(list.expand(_extractBadges));
+    }
+
+    final map = _asMap(value);
+    if (map == null) return const [];
+
+    final parsedBadge = _parseBadge(map);
+    if (parsedBadge != null) return [parsedBadge];
+
+    final badges = <PinnedChatBadge>[];
+    for (final key in const [
+      'edges',
+      'nodes',
+      'items',
+      'badges',
+      'displayBadges',
+      'chatBadges',
+      'badgeInfo',
+    ]) {
+      badges.addAll(_extractBadges(map[key]));
+    }
+
+    for (final key in const ['node', 'badge']) {
+      badges.addAll(_extractBadges(map[key]));
+    }
+
+    if (badges.isNotEmpty) return _dedupeBadges(badges);
+
+    for (final entry in map.entries) {
+      final entryValue = _asMap(entry.value);
+      if (entryValue == null) continue;
+
+      final candidate = Map<String, dynamic>.from(entryValue);
+      if (!_hasBadgeSetId(candidate)) {
+        candidate.putIfAbsent('id', () => entry.key);
+      }
+      badges.addAll(_extractBadges(candidate));
+    }
+
+    return _dedupeBadges(badges);
+  }
+
+  static List<PinnedChatBadge> _inferPinnedByBadges({
+    required Map<String, dynamic> node,
+    required Map<String, dynamic>? pinnedBy,
+    required Map<String, dynamic>? sender,
+    required List<PinnedChatBadge> senderBadges,
+  }) {
+    final typeBadge = _authorityBadgeForPinnedType(_asString(node['type']));
+    if (typeBadge != null) return [typeBadge];
+
+    if (!_isSameUser(pinnedBy, sender)) return const [];
+    return senderBadges.where(_isAuthorityBadge).toList(growable: false);
+  }
+
+  static PinnedChatBadge? _authorityBadgeForPinnedType(String? type) {
+    final label = _normalizeBadgeLabel(type ?? '');
+    if (label == 'mod' || label == 'moderator') {
+      return const PinnedChatBadge(
+        setId: 'moderator',
+        version: '1',
+        title: 'Moderator',
+      );
+    }
+
+    if (label == 'headmod' || label == 'headmoderator') {
+      return const PinnedChatBadge(
+        setId: 'head-moderator',
+        version: '1',
+        title: 'Head Mod',
+      );
+    }
+
+    if (label == 'broadcaster' || label == 'channelowner') {
+      return const PinnedChatBadge(
+        setId: 'broadcaster',
+        version: '1',
+        title: 'Broadcaster',
+      );
+    }
+
+    return null;
+  }
+
+  static bool _isSameUser(
+    Map<String, dynamic>? first,
+    Map<String, dynamic>? second,
+  ) {
+    final firstId = _asString(first?['id']);
+    final secondId = _asString(second?['id']);
+    if (firstId != null && secondId != null) return firstId == secondId;
+
+    final firstLogin =
+        _asString(first?['login']) ?? _asString(first?['userLogin']);
+    final secondLogin =
+        _asString(second?['login']) ?? _asString(second?['userLogin']);
+    if (firstLogin != null && secondLogin != null) {
+      return firstLogin.toLowerCase() == secondLogin.toLowerCase();
+    }
+
+    final firstName =
+        _asString(first?['displayName']) ?? _asString(first?['display_name']);
+    final secondName =
+        _asString(second?['displayName']) ?? _asString(second?['display_name']);
+    if (firstName != null && secondName != null) {
+      return firstName.toLowerCase() == secondName.toLowerCase();
+    }
+
+    return false;
+  }
+
+  static bool _isAuthorityBadge(PinnedChatBadge badge) {
+    return [
+      badge.setId,
+      badge.title,
+    ].map(_normalizeBadgeLabel).any(_isAuthorityBadgeLabel);
+  }
+
+  static String _normalizeBadgeLabel(String label) {
+    return label.toLowerCase().replaceAll(RegExp(r'[\s_\-/]'), '');
+  }
+
+  static bool _isAuthorityBadgeLabel(String label) {
+    return label == 'mod' ||
+        label == 'moderator' ||
+        label == 'headmod' ||
+        label == 'headmoderator' ||
+        label == 'broadcaster';
+  }
+
+  static List<PinnedChatBadge> _dedupeBadges(Iterable<PinnedChatBadge> badges) {
+    final seen = <String>{};
+    final result = <PinnedChatBadge>[];
+    for (final badge in badges) {
+      if (seen.add(badge.key)) result.add(badge);
+    }
+    return result;
   }
 
   static PinnedChatBadge? _parseBadge(Map<String, dynamic> badge) {
-    var setId =
-        _asString(badge['setID']) ??
-        _asString(badge['setId']) ??
-        _asString(badge['set_id']) ??
-        _asString(badge['id']);
-    var version =
-        _asString(badge['version']) ??
-        _asString(badge['versionID']) ??
-        _asString(badge['versionId']) ??
-        _asString(badge['version_id']);
+    if (!_hasBadgeIdentity(badge)) return null;
+
+    var setId = _extractBadgeSetId(badge);
+    var version = _extractBadgeVersion(badge);
+    final imageUrl = _extractImageUrl(badge);
+    final rawId = _asString(badge['id']);
+
+    if (setId == null && rawId != null && rawId.contains('/')) {
+      setId = rawId;
+    }
 
     if (setId != null && setId.contains('/') && version == null) {
       final parts = setId.split('/');
@@ -218,7 +380,6 @@ class PinnedChatMessage {
         _asString(badge['name']) ??
         setId ??
         'Twitch badge';
-    final imageUrl = _extractImageUrl(badge);
 
     if (setId == null && imageUrl == null) return null;
 
@@ -228,6 +389,41 @@ class PinnedChatMessage {
       title: title,
       imageUrl: imageUrl,
     );
+  }
+
+  static bool _hasBadgeIdentity(Map<String, dynamic> badge) {
+    if (_hasBadgeSetId(badge) || _extractBadgeVersion(badge) != null) {
+      return true;
+    }
+
+    final id = _asString(badge['id']);
+    return (id != null && id.contains('/')) || _extractImageUrl(badge) != null;
+  }
+
+  static bool _hasBadgeSetId(Map<String, dynamic> badge) {
+    return _extractBadgeSetId(badge) != null;
+  }
+
+  static String? _extractBadgeSetId(Map<String, dynamic> badge) {
+    return _asString(badge['setID']) ??
+        _asString(badge['setId']) ??
+        _asString(badge['set_id']) ??
+        _asString(badge['badgeSetID']) ??
+        _asString(badge['badgeSetId']) ??
+        _asString(badge['badge_set_id']) ??
+        _asString(badge['badgeSet']) ??
+        _asString(badge['set']);
+  }
+
+  static String? _extractBadgeVersion(Map<String, dynamic> badge) {
+    return _asString(badge['version']) ??
+        _asString(badge['versionID']) ??
+        _asString(badge['versionId']) ??
+        _asString(badge['version_id']) ??
+        _asString(badge['badgeVersion']) ??
+        _asString(badge['badgeVersionID']) ??
+        _asString(badge['badgeVersionId']) ??
+        _asString(badge['badge_version']);
   }
 
   static String? _extractImageUrl(Map<String, dynamic> value) {
@@ -247,6 +443,9 @@ class PinnedChatMessage {
       'image_url_1x',
       'image1x',
       'url1x',
+      'imageURL',
+      'imageUrl',
+      'image_url',
       'url',
     ]) {
       final url = _asString(value[key]);

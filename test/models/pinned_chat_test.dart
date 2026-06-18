@@ -204,6 +204,131 @@ void main() {
       );
     });
 
+    test('parses display badges and infers pinned-by authority badge', () {
+      final pins = PinnedChatMessage.listFromGqlResponse({
+        'data': {
+          'channel': {
+            'pinnedChatMessages': {
+              'edges': [
+                {
+                  'node': {
+                    'id': 'pin-display-badges',
+                    'type': 'MOD',
+                    'pinnedBy': {'id': '672062767', 'displayName': '0pogix'},
+                    'pinnedMessage': {
+                      'id': 'msg-display-badges',
+                      'content': {
+                        'text':
+                            'PartyPopper 50% off on all subs! https://www.twitch.tv/subs/marlon',
+                        'fragments': [
+                          {
+                            'content': {'emoteID': '426170'},
+                            'text': 'PartyPopper',
+                          },
+                          {'content': null, 'text': ' 50% off on all subs! '},
+                          {
+                            'content': null,
+                            'text': 'https://www.twitch.tv/subs/marlon',
+                          },
+                        ],
+                      },
+                      'sentAt': '2026-06-18T16:37:51.213618213Z',
+                      'sender': {
+                        'id': '672062767',
+                        'displayName': '0pogix',
+                        'displayBadges': [
+                          {
+                            'id': 'bW9kZXJhdG9yOzE7',
+                            'setID': 'moderator',
+                            'version': '1',
+                          },
+                          {
+                            'id': 'c3Vic2NyaWJlcjsxMjsxMDE5NzMzNjQ3',
+                            'setID': 'subscriber',
+                            'version': '12',
+                          },
+                          {
+                            'id': 'eW91LWdvdC10aGlzOzE7',
+                            'setID': 'you-got-this',
+                            'version': '1',
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      });
+
+      final pin = pins.single;
+
+      expect(pin.senderBadges.map((badge) => badge.key), [
+        'moderator/1',
+        'subscriber/12',
+        'you-got-this/1',
+      ]);
+      expect(pin.pinnedByBadges.single.key, 'moderator/1');
+      expect(pin.fragments.first.emote?.id, '426170');
+    });
+
+    test('parses badge connection and keyed map payloads', () {
+      final pins = PinnedChatMessage.listFromGqlResponse({
+        'data': {
+          'channel': {
+            'pinnedChatMessages': {
+              'edges': [
+                {
+                  'node': {
+                    'id': 'pin-badge-shapes',
+                    'pinnedBy': {
+                      'displayName': 'ModName',
+                      'displayBadges': {
+                        'edges': [
+                          {
+                            'node': {
+                              'setID': 'broadcaster',
+                              'version': '1',
+                              'title': 'Broadcaster',
+                            },
+                          },
+                        ],
+                      },
+                    },
+                    'pinnedMessage': {
+                      'id': 'msg-badge-shapes',
+                      'text': 'Pinned message',
+                      'sender': {
+                        'displayName': 'SenderName',
+                        'badges': {
+                          'subscriber/24': {
+                            'title': '24-Month Subscriber',
+                            'imageURL': 'https://static.example/sub.png',
+                          },
+                          'vip/1': {'title': 'VIP'},
+                        },
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      });
+
+      final pin = pins.single;
+
+      expect(pin.pinnedByBadges.single.key, 'broadcaster/1');
+      expect(pin.senderBadges.map((badge) => badge.key), [
+        'subscriber/24',
+        'vip/1',
+      ]);
+      expect(pin.senderBadges.first.imageUrl, 'https://static.example/sub.png');
+    });
+
     test('skips malformed nodes without an id or message id', () {
       final pins = PinnedChatMessage.listFromGqlResponse({
         'data': {

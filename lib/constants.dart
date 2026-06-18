@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 /// Twitch API client ID.
 const clientId = String.fromEnvironment('CLIENT_ID');
 
+/// Twitch web GraphQL client ID used for viewer-accessible GQL operations.
+const twitchGqlClientId = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
+
 /// SharedPreferences key for the per-channel last-selected stream quality.
 /// A saved variant that does not exist on another channel falls back to Auto.
 String lastStreamQualityKey(String userLogin) =>

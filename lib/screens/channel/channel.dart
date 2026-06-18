@@ -65,6 +65,7 @@ class _VideoChatState extends State<VideoChat>
 
   late final ChatTabsStore _chatTabsStore = ChatTabsStore(
     twitchApi: context.twitchApi,
+    twitchGqlApi: context.twitchGqlApi,
     bttvApi: context.bttvApi,
     ffzApi: context.ffzApi,
     sevenTVApi: context.sevenTVApi,

@@ -4,12 +4,15 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:frosty/apis/twitch_api.dart';
+import 'package:frosty/apis/twitch_gql_api.dart';
 import 'package:frosty/models/badges.dart';
 import 'package:frosty/models/emotes.dart';
 import 'package:frosty/models/events.dart';
 import 'package:frosty/models/irc.dart';
+import 'package:frosty/models/pinned_chat.dart';
 import 'package:frosty/screens/channel/chat/details/chat_details_store.dart';
 import 'package:frosty/screens/channel/chat/stores/chat_assets_store.dart';
+import 'package:frosty/screens/channel/chat/stores/pinned_chat_reconciliation.dart';
 import 'package:frosty/screens/settings/stores/auth_store.dart';
 import 'package:frosty/screens/settings/stores/settings_store.dart';
 import 'package:frosty/utils.dart';
@@ -70,6 +73,8 @@ abstract class ChatStoreBase with Store {
   /// real bottom bar reports its measured height via [setBottomBarHeight].
   static const _baseBottomBarHeight = 68.0;
 
+  static const _pinnedChatPollInterval = Duration(seconds: 30);
+
   /// Server-initiated graceful reconnect notice. Twitch sends this untagged
   /// before maintenance so clients can re-establish ahead of the close.
   static const _serverReconnectNotice = ':tmi.twitch.tv RECONNECT';
@@ -103,6 +108,8 @@ abstract class ChatStoreBase with Store {
       settings.showVideo && _chatDelay > Duration.zero;
 
   final TwitchApi twitchApi;
+
+  final TwitchGqlApi twitchGqlApi;
 
   /// The amount of messages to free (remove) when the [_messageLimit] is reached.
   final _messagesToRemove = (_messageLimit * 0.2).toInt();
@@ -185,6 +192,11 @@ abstract class ChatStoreBase with Store {
   /// The periodic timer used for batching chat message re-renders.
   Timer? _messageBufferTimer;
 
+  /// Polls Twitch web GQL for viewer-visible pinned chat state.
+  Timer? _pinnedChatPollTimer;
+
+  var _isFetchingPinnedChats = false;
+
   /// The list of chat messages to add once autoscroll is resumed.
   /// This is used as an optimization to prevent the list from being updated/shifted while the user is scrolling.
   final messageBuffer = ObservableList<IRCMessage>();
@@ -233,6 +245,10 @@ abstract class ChatStoreBase with Store {
   /// The list of chat messages to render and display.
   @readonly
   var _messages = ObservableList<IRCMessage>();
+
+  final pinnedChats = ObservableList<PinnedChatMessage>();
+
+  final dismissedPinnedChatIds = ObservableSet<String>();
 
   /// The list of chat messages that should be rendered. Used to prevent jank when resuming scroll.
   @computed
@@ -345,6 +361,7 @@ abstract class ChatStoreBase with Store {
 
   ChatStoreBase({
     required this.twitchApi,
+    required this.twitchGqlApi,
     required this.auth,
     required this.chatDetailsStore,
     required this.assetsStore,
@@ -398,6 +415,16 @@ abstract class ChatStoreBase with Store {
       ),
     );
 
+    reactions.add(
+      reaction((_) => settings.showUserNotices, (showUserNotices) {
+        if (showUserNotices) {
+          _startPinnedChatPolling();
+        } else {
+          _stopPinnedChatPolling(clearPins: true);
+        }
+      }),
+    );
+
     // Start chat delay countdown when toggling video on, cancel when off
     reactions.add(
       reaction((_) => settings.showVideo, (showVideo) {
@@ -429,6 +456,10 @@ abstract class ChatStoreBase with Store {
     );
 
     assetsStore.init();
+
+    if (settings.showUserNotices) {
+      _startPinnedChatPolling();
+    }
 
     _messages.add(IRCMessage.createNotice(message: 'Connecting to chat...'));
 
@@ -539,6 +570,69 @@ abstract class ChatStoreBase with Store {
     if (clearSevenTV) {
       _pendingSevenTVCallbacks.clear();
     }
+  }
+
+  void _startPinnedChatPolling() {
+    _pinnedChatPollTimer?.cancel();
+    _fetchPinnedChats();
+    _pinnedChatPollTimer = Timer.periodic(
+      _pinnedChatPollInterval,
+      (_) => _fetchPinnedChats(),
+    );
+  }
+
+  void _stopPinnedChatPolling({bool clearPins = false}) {
+    _pinnedChatPollTimer?.cancel();
+    _pinnedChatPollTimer = null;
+    if (clearPins) {
+      runInAction(pinnedChats.clear);
+    }
+  }
+
+  Future<void> refreshPinnedChats() => _fetchPinnedChats();
+
+  Future<void> _fetchPinnedChats() async {
+    if (_isFetchingPinnedChats || !settings.showUserNotices) return;
+    _isFetchingPinnedChats = true;
+
+    try {
+      final fetchedPins = await twitchGqlApi.getPinnedChats(
+        channelId: channelId,
+      );
+      final visiblePins = reconcilePinnedChats(
+        currentPins: pinnedChats,
+        fetchedPins: fetchedPins,
+        dismissedPinIds: dismissedPinnedChatIds,
+      );
+
+      runInAction(() {
+        pinnedChats
+          ..clear()
+          ..addAll(visiblePins);
+      });
+    } catch (e) {
+      debugPrint('Failed to fetch pinned chats: $e');
+    } finally {
+      _isFetchingPinnedChats = false;
+    }
+  }
+
+  void dismissPinnedChat(String id) {
+    dismissPinnedChats([id]);
+  }
+
+  void dismissPinnedChats(Iterable<String> ids) {
+    final idSet = ids.toSet();
+    if (idSet.isEmpty) return;
+
+    runInAction(() {
+      dismissedPinnedChatIds.addAll(idSet);
+      pinnedChats.removeWhere((pin) => idSet.contains(pin.id));
+    });
+  }
+
+  void dismissAllPinnedChats() {
+    dismissPinnedChats(pinnedChats.map((pin) => pin.id).toList());
   }
 
   /// Handle and process the provided string-representation of the IRC data.
@@ -1450,6 +1544,7 @@ abstract class ChatStoreBase with Store {
     _clearPendingDelayedCallbacks();
 
     _messageBufferTimer?.cancel();
+    _pinnedChatPollTimer?.cancel();
     _notificationTimer?.cancel();
     _sendingTimeoutTimer?.cancel();
     _cancelChatDelayCountdown();

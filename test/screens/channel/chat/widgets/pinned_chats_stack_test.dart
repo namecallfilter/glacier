@@ -80,6 +80,36 @@ void main() {
     expect(find.text('Dismiss all'), findsNothing);
   });
 
+  testWidgets('all pinned chats can be minimized', (tester) async {
+    await tester.pumpWidget(
+      _TestApp(
+        child: PinnedChatsStack(
+          pinnedChats: [_pin(id: 'pin-1', messageText: 'Short pinned message')],
+          launchExternal: false,
+          onDismiss: (_) {},
+        ),
+      ),
+    );
+
+    expect(find.byTooltip('Collapse pinned chat'), findsOneWidget);
+    expect(find.byTooltip('Expand pinned chat'), findsNothing);
+    expect(find.textContaining('SenderName'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Collapse pinned chat'));
+    await tester.pumpAndSettle();
+
+    expect(find.byTooltip('Expand pinned chat'), findsOneWidget);
+    expect(find.byTooltip('Collapse pinned chat'), findsNothing);
+    expect(_findRichTextContaining('Short pinned message').maxLines, 1);
+    expect(find.textContaining('SenderName'), findsNothing);
+
+    await tester.tap(find.byTooltip('Expand pinned chat'));
+    await tester.pumpAndSettle();
+
+    expect(find.byTooltip('Collapse pinned chat'), findsOneWidget);
+    expect(find.textContaining('SenderName'), findsOneWidget);
+  });
+
   testWidgets('styles and launches links in pinned chat text', (tester) async {
     await tester.pumpWidget(
       _TestApp(

@@ -48,11 +48,9 @@ class _PinnedChatsStackState extends State<PinnedChatsStack> {
     if (widget.pinnedChats.isEmpty) return const SizedBox.shrink();
 
     final topPin = widget.pinnedChats.first;
-    final canToggleTopPin = _canTogglePinnedChat(topPin.messageText);
     final startsMinimized = _shouldStartMinimized(topPin.messageText);
     final isToggled = _toggledPinIds.contains(topPin.id);
-    final isTopPinExpanded =
-        canToggleTopPin && (startsMinimized ? isToggled : !isToggled);
+    final isTopPinExpanded = startsMinimized ? isToggled : !isToggled;
     final stackHeight = isTopPinExpanded
         ? PinnedChatsStack.expandedHeight
         : PinnedChatsStack.collapsedHeight;
@@ -75,7 +73,6 @@ class _PinnedChatsStackState extends State<PinnedChatsStack> {
                 twitchBadges: widget.twitchBadges,
                 emoteToObject: widget.emoteToObject,
                 launchExternal: widget.launchExternal,
-                canToggle: canToggleTopPin,
                 isExpanded: isTopPinExpanded,
                 onToggle: () => _togglePinnedChat(topPin),
                 onDismiss: () => widget.onDismiss(topPin.id),
@@ -103,7 +100,6 @@ class _PinnedChatCard extends StatelessWidget {
   final Map<String, ChatBadge> twitchBadges;
   final Map<String, Emote> emoteToObject;
   final bool launchExternal;
-  final bool canToggle;
   final bool isExpanded;
   final VoidCallback onToggle;
   final VoidCallback onDismiss;
@@ -113,7 +109,6 @@ class _PinnedChatCard extends StatelessWidget {
     required this.twitchBadges,
     required this.emoteToObject,
     required this.launchExternal,
-    required this.canToggle,
     required this.isExpanded,
     required this.onToggle,
     required this.onDismiss,
@@ -123,7 +118,7 @@ class _PinnedChatCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final actionsWidth = canToggle ? 64.0 : 32.0;
+    const actionsWidth = 64.0;
     final headerStyle = theme.textTheme.labelMedium?.copyWith(
       color: colorScheme.onSurfaceVariant.withValues(alpha: 0.86),
       fontWeight: FontWeight.w700,
@@ -173,17 +168,17 @@ class _PinnedChatCard extends StatelessWidget {
                           emoteToObject: emoteToObject,
                           launchExternal: launchExternal,
                           breakLongLinks: isExpanded,
-                          maxLines: canToggle ? (isExpanded ? 5 : 1) : 2,
-                          overflow: canToggle && !isExpanded
-                              ? TextOverflow.ellipsis
-                              : TextOverflow.clip,
+                          maxLines: isExpanded ? 5 : 1,
+                          overflow: isExpanded
+                              ? TextOverflow.clip
+                              : TextOverflow.ellipsis,
                           style: theme.textTheme.bodyMedium?.copyWith(
                             color: colorScheme.onSurface,
                             fontWeight: FontWeight.w700,
                             height: 1.24,
                           ),
                         ),
-                        if (!canToggle || isExpanded) ...[
+                        if (isExpanded) ...[
                           const SizedBox(height: 5),
                           _PinnedSenderLine(
                             pin: pin,
@@ -208,19 +203,18 @@ class _PinnedChatCard extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (canToggle)
-                    _PinnedIconButton(
-                      onPressed: onToggle,
-                      icon: Icon(
-                        isExpanded
-                            ? Icons.keyboard_arrow_up_rounded
-                            : Icons.keyboard_arrow_down_rounded,
-                      ),
-                      tooltip: isExpanded
-                          ? 'Collapse pinned chat'
-                          : 'Expand pinned chat',
-                      iconSize: 20,
+                  _PinnedIconButton(
+                    onPressed: onToggle,
+                    icon: Icon(
+                      isExpanded
+                          ? Icons.keyboard_arrow_up_rounded
+                          : Icons.keyboard_arrow_down_rounded,
                     ),
+                    tooltip: isExpanded
+                        ? 'Collapse pinned chat'
+                        : 'Expand pinned chat',
+                    iconSize: 20,
+                  ),
                   _PinnedIconButton(
                     onPressed: onDismiss,
                     icon: const Icon(Icons.close_rounded),
@@ -705,9 +699,6 @@ class _PinnedBadgeButton extends StatelessWidget {
     );
   }
 }
-
-bool _canTogglePinnedChat(String text) =>
-    _shouldStartMinimized(text) || regexLink.hasMatch(text);
 
 bool _shouldStartMinimized(String text) {
   return text.length > 92 || text.contains('\n');

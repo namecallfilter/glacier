@@ -1,5 +1,6 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frosty/models/badges.dart';
@@ -498,8 +499,10 @@ void main() {
     expect(_findRichTextContaining('PartyPopper').maxLines, 1);
     expect(find.textContaining('SenderName'), findsNothing);
 
-    await tester.tap(find.byTooltip('Expand pinned chat'));
-    await tester.pumpAndSettle();
+    if (find.byTooltip('Expand pinned chat').evaluate().isNotEmpty) {
+      await tester.tap(find.byTooltip('Expand pinned chat'));
+      await tester.pumpAndSettle();
+    }
 
     expect(find.byTooltip('Collapse pinned chat'), findsOneWidget);
     expect(_findRichTextContaining('PartyPopper').maxLines, greaterThan(1));
@@ -523,8 +526,10 @@ void main() {
     expect(find.byTooltip('Expand pinned chat'), findsOneWidget);
     expect(_findRichTextContaining('M3 LINKS').maxLines, 1);
 
-    await tester.tap(find.byTooltip('Expand pinned chat'));
-    await tester.pumpAndSettle();
+    if (find.byTooltip('Expand pinned chat').evaluate().isNotEmpty) {
+      await tester.tap(find.byTooltip('Expand pinned chat'));
+      await tester.pumpAndSettle();
+    }
 
     expect(find.byTooltip('Collapse pinned chat'), findsOneWidget);
     expect(_findRichTextContaining('M3 LINKS').maxLines, greaterThan(1));
@@ -536,7 +541,7 @@ void main() {
 
     await tester.pumpWidget(
       _TestApp(
-        width: 210,
+        width: 180,
         child: PinnedChatsStack(
           pinnedChats: [
             _pin(
@@ -614,6 +619,18 @@ void main() {
                   title: 'Moderator',
                   imageUrl: 'https://static.example/sender-mod.png',
                 ),
+                PinnedChatBadge(
+                  setId: 'subscriber',
+                  version: '12',
+                  title: '12-Month Subscriber',
+                  imageUrl: 'https://static.example/sender-sub.png',
+                ),
+                PinnedChatBadge(
+                  setId: 'bits',
+                  version: '1000',
+                  title: 'Cheer 1K',
+                  imageUrl: 'https://static.example/sender-bits.png',
+                ),
               ],
             ),
           ],
@@ -630,6 +647,65 @@ void main() {
       metadataTexts.where((text) => text.overflow == TextOverflow.ellipsis),
       isEmpty,
     );
+  });
+
+  testWidgets('keeps badges on the same line as wrapped names', (tester) async {
+    const longMessage = 'Follow tiktok https://www.tiktok.com/@yuqi';
+    const displayName = 'Jaycondones2xLongName';
+
+    await tester.pumpWidget(
+      _TestApp(
+        width: 160,
+        child: PinnedChatsStack(
+          pinnedChats: [
+            _pin(
+              id: 'pin-1',
+              messageText: longMessage,
+              pinnedByDisplayName: displayName,
+              senderDisplayName: displayName,
+              pinnedByBadges: const [
+                PinnedChatBadge(
+                  setId: 'moderator',
+                  version: '1',
+                  title: 'Moderator',
+                  imageUrl: 'https://static.example/pinner-mod.png',
+                ),
+              ],
+              senderBadges: const [
+                PinnedChatBadge(
+                  setId: 'moderator',
+                  version: '1',
+                  title: 'Moderator',
+                  imageUrl: 'https://static.example/sender-mod.png',
+                ),
+              ],
+            ),
+          ],
+          launchExternal: false,
+          onDismiss: (_) {},
+        ),
+      ),
+    );
+
+    if (find.byTooltip('Expand pinned chat').evaluate().isNotEmpty) {
+      await tester.tap(find.byTooltip('Expand pinned chat'));
+      await tester.pumpAndSettle();
+    }
+
+    final nameCenters = _textFirstLineCentersY(displayName);
+    expect(nameCenters.length, greaterThanOrEqualTo(2));
+
+    final pinnedByBadgeCenter = tester
+        .getRect(_findImage('https://static.example/pinner-mod.png'))
+        .center
+        .dy;
+    expect(_nearestDistance(pinnedByBadgeCenter, nameCenters), lessThan(8));
+
+    final senderBadgeCenter = tester
+        .getRect(_findImage('https://static.example/sender-mod.png'))
+        .center
+        .dy;
+    expect(_nearestDistance(senderBadgeCenter, nameCenters), lessThan(8));
   });
 }
 
@@ -718,4 +794,37 @@ List<RichText> _findRichTextsContaining(String text) {
       if ((richText.widget as RichText).text.toPlainText().contains(text))
         richText.widget as RichText,
   ];
+}
+
+List<double> _textFirstLineCentersY(String text) {
+  final centers = <double>[];
+
+  for (final element in find.byType(RichText).evaluate()) {
+    final center = _firstLineCenterY(element, text);
+    if (center != null) centers.add(center);
+  }
+
+  return centers;
+}
+
+double? _firstLineCenterY(Element element, String text) {
+  final renderObject = element.renderObject;
+  if (renderObject is! RenderParagraph) return null;
+
+  final plainText = renderObject.text.toPlainText();
+  if (plainText != text) return null;
+
+  final boxes = renderObject.getBoxesForSelection(
+    TextSelection(baseOffset: 0, extentOffset: plainText.length),
+  );
+  if (boxes.isEmpty) return null;
+
+  final paragraphOffset = renderObject.localToGlobal(Offset.zero);
+  return boxes.first.toRect().shift(paragraphOffset).center.dy;
+}
+
+double _nearestDistance(double target, List<double> values) {
+  return values
+      .map((value) => (value - target).abs())
+      .reduce((a, b) => a < b ? a : b);
 }

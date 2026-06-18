@@ -286,20 +286,82 @@ class _PinnedHeaderLine extends StatelessWidget {
       authorityOnly: true,
     );
 
-    return Text.rich(
-      TextSpan(
-        children: [
-          TextSpan(text: 'Pinned by ', style: style),
-          ..._pinnedBadgeSpans(
-            badges,
-            size: 14,
-            launchExternal: launchExternal,
+    if (badges.isEmpty) {
+      return Text(
+        'Pinned by $pinnedByName',
+        overflow: TextOverflow.visible,
+        softWrap: true,
+        style: style,
+      );
+    }
+
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text('Pinned by ', style: style),
+        _PinnedBadgeNameRun(
+          badges: badges,
+          name: pinnedByName,
+          badgeSize: 14,
+          launchExternal: launchExternal,
+          style: style,
+        ),
+      ],
+    );
+  }
+}
+
+class _PinnedBadgeNameRun extends StatelessWidget {
+  final List<ChatBadge> badges;
+  final String name;
+  final double badgeSize;
+  final bool launchExternal;
+  final TextStyle? style;
+
+  const _PinnedBadgeNameRun({
+    required this.badges,
+    required this.name,
+    required this.badgeSize,
+    required this.launchExternal,
+    this.style,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final badgeNameRun = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final badge in badges)
+          Padding(
+            padding: const EdgeInsets.only(right: 3),
+            child: _PinnedBadgeButton(
+              badge: badge,
+              size: badgeSize,
+              launchExternal: launchExternal,
+            ),
           ),
-          TextSpan(text: pinnedByName, style: style),
-        ],
-      ),
-      overflow: TextOverflow.visible,
-      softWrap: true,
+        Text(
+          name,
+          overflow: TextOverflow.visible,
+          softWrap: false,
+          style: style,
+        ),
+      ],
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (!constraints.hasBoundedWidth) return badgeNameRun;
+
+        return ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: constraints.maxWidth),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: badgeNameRun,
+          ),
+        );
+      },
     );
   }
 }
@@ -320,31 +382,34 @@ class _PinnedSenderLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final badges = _resolvedPinnedBadges(pin.senderBadges, twitchBadges);
-    final text = _senderLine(pin);
-
-    return Text.rich(
-      TextSpan(
-        children: [
-          ..._pinnedBadgeSpans(
-            badges,
-            size: 16,
-            launchExternal: launchExternal,
-          ),
-          TextSpan(text: text, style: style),
-        ],
-      ),
-      overflow: TextOverflow.visible,
-      softWrap: true,
-    );
-  }
-
-  String _senderLine(PinnedChatMessage pin) {
     final sentAt = pin.sentAt == null
         ? null
         : DateFormat.jm().format(pin.sentAt!.toLocal());
-    return sentAt == null
-        ? pin.senderDisplayName
-        : '${pin.senderDisplayName} sent at $sentAt';
+
+    if (badges.isEmpty) {
+      return Text(
+        sentAt == null
+            ? pin.senderDisplayName
+            : '${pin.senderDisplayName} sent at $sentAt',
+        overflow: TextOverflow.visible,
+        softWrap: true,
+        style: style,
+      );
+    }
+
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        _PinnedBadgeNameRun(
+          badges: badges,
+          name: pin.senderDisplayName,
+          badgeSize: 16,
+          launchExternal: launchExternal,
+          style: style,
+        ),
+        if (sentAt != null) Text(' sent at $sentAt', style: style),
+      ],
+    );
   }
 }
 
@@ -605,27 +670,6 @@ bool _isAuthorityBadgeLabel(String label) {
       label == 'headmod' ||
       label == 'headmoderator' ||
       label == 'broadcaster';
-}
-
-List<InlineSpan> _pinnedBadgeSpans(
-  List<ChatBadge> badges, {
-  required double size,
-  required bool launchExternal,
-}) {
-  return [
-    for (final badge in badges)
-      WidgetSpan(
-        alignment: PlaceholderAlignment.middle,
-        child: Padding(
-          padding: const EdgeInsets.only(right: 3),
-          child: _PinnedBadgeButton(
-            badge: badge,
-            size: size,
-            launchExternal: launchExternal,
-          ),
-        ),
-      ),
-  ];
 }
 
 class _PinnedBadgeButton extends StatelessWidget {

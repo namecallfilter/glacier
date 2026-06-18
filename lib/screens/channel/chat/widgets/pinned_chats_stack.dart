@@ -2,6 +2,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:frosty/constants.dart';
 import 'package:frosty/models/badges.dart';
+import 'package:frosty/models/emotes.dart';
 import 'package:frosty/models/irc.dart';
 import 'package:frosty/models/pinned_chat.dart';
 import 'package:frosty/widgets/frosty_cached_network_image.dart';
@@ -15,6 +16,7 @@ class PinnedChatsStack extends StatefulWidget {
 
   final List<PinnedChatMessage> pinnedChats;
   final Map<String, ChatBadge> twitchBadges;
+  final Map<String, Emote> emoteToObject;
   final bool launchExternal;
   final void Function(String id) onDismiss;
   final void Function(Iterable<String> ids) onDismissMany;
@@ -23,6 +25,7 @@ class PinnedChatsStack extends StatefulWidget {
     super.key,
     required this.pinnedChats,
     this.twitchBadges = const {},
+    this.emoteToObject = const {},
     required this.launchExternal,
     required this.onDismiss,
     required this.onDismissMany,
@@ -80,6 +83,7 @@ class _PinnedChatsStackState extends State<PinnedChatsStack> {
                 pin: topPin,
                 count: widget.pinnedChats.length,
                 twitchBadges: widget.twitchBadges,
+                emoteToObject: widget.emoteToObject,
                 launchExternal: widget.launchExternal,
                 canToggle: canToggleTopPin,
                 isExpanded: isTopPinExpanded,
@@ -170,6 +174,7 @@ class _PinnedChatsStackState extends State<PinnedChatsStack> {
                       title: _PinnedMessageText(
                         text: pin.messageText,
                         fragments: pin.fragments,
+                        emoteToObject: widget.emoteToObject,
                         launchExternal: widget.launchExternal,
                         breakLongLinks: _canTogglePinnedChat(pin.messageText),
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -179,6 +184,7 @@ class _PinnedChatsStackState extends State<PinnedChatsStack> {
                       subtitle: _PinnedSenderLine(
                         pin: pin,
                         twitchBadges: widget.twitchBadges,
+                        launchExternal: widget.launchExternal,
                         includePinnedBy: true,
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
@@ -257,6 +263,7 @@ class _PinnedChatCard extends StatelessWidget {
   final PinnedChatMessage pin;
   final int count;
   final Map<String, ChatBadge> twitchBadges;
+  final Map<String, Emote> emoteToObject;
   final bool launchExternal;
   final bool canToggle;
   final bool isExpanded;
@@ -268,6 +275,7 @@ class _PinnedChatCard extends StatelessWidget {
     required this.pin,
     required this.count,
     required this.twitchBadges,
+    required this.emoteToObject,
     required this.launchExternal,
     required this.canToggle,
     required this.isExpanded,
@@ -320,6 +328,7 @@ class _PinnedChatCard extends StatelessWidget {
                           child: _PinnedHeaderLine(
                             pin: pin,
                             twitchBadges: twitchBadges,
+                            launchExternal: launchExternal,
                             style: headerStyle,
                           ),
                         ),
@@ -330,6 +339,7 @@ class _PinnedChatCard extends StatelessWidget {
                     _PinnedMessageText(
                       text: pin.messageText,
                       fragments: pin.fragments,
+                      emoteToObject: emoteToObject,
                       launchExternal: launchExternal,
                       breakLongLinks: isExpanded,
                       maxLines: canToggle ? (isExpanded ? 5 : 1) : 2,
@@ -346,6 +356,7 @@ class _PinnedChatCard extends StatelessWidget {
                     _PinnedSenderLine(
                       pin: pin,
                       twitchBadges: twitchBadges,
+                      launchExternal: launchExternal,
                       style: theme.textTheme.labelSmall?.copyWith(
                         color: colorScheme.onSurfaceVariant.withValues(
                           alpha: 0.78,
@@ -424,11 +435,13 @@ class _PinnedCountChip extends StatelessWidget {
 class _PinnedHeaderLine extends StatelessWidget {
   final PinnedChatMessage pin;
   final Map<String, ChatBadge> twitchBadges;
+  final bool launchExternal;
   final TextStyle? style;
 
   const _PinnedHeaderLine({
     required this.pin,
     required this.twitchBadges,
+    required this.launchExternal,
     this.style,
   });
 
@@ -452,7 +465,12 @@ class _PinnedHeaderLine extends StatelessWidget {
     return Row(
       children: [
         Text('Pinned by ', style: style),
-        ..._pinnedBadgeWidgets(badges, size: 14),
+        ..._pinnedBadgeWidgets(
+          context,
+          badges,
+          size: 14,
+          launchExternal: launchExternal,
+        ),
         Flexible(
           child: Text(
             pinnedByName,
@@ -469,12 +487,14 @@ class _PinnedHeaderLine extends StatelessWidget {
 class _PinnedSenderLine extends StatelessWidget {
   final PinnedChatMessage pin;
   final Map<String, ChatBadge> twitchBadges;
+  final bool launchExternal;
   final bool includePinnedBy;
   final TextStyle? style;
 
   const _PinnedSenderLine({
     required this.pin,
     required this.twitchBadges,
+    required this.launchExternal,
     this.includePinnedBy = false,
     this.style,
   });
@@ -494,7 +514,12 @@ class _PinnedSenderLine extends StatelessWidget {
 
     return Row(
       children: [
-        ..._pinnedBadgeWidgets(badges, size: 16),
+        ..._pinnedBadgeWidgets(
+          context,
+          badges,
+          size: 16,
+          launchExternal: launchExternal,
+        ),
         Flexible(
           child: Text(
             text,
@@ -522,6 +547,7 @@ class _PinnedSenderLine extends StatelessWidget {
 class _PinnedMessageText extends StatelessWidget {
   final String text;
   final List<PinnedChatFragment> fragments;
+  final Map<String, Emote> emoteToObject;
   final bool launchExternal;
   final bool breakLongLinks;
   final TextStyle? style;
@@ -531,6 +557,7 @@ class _PinnedMessageText extends StatelessWidget {
   const _PinnedMessageText({
     required this.text,
     this.fragments = const [],
+    this.emoteToObject = const {},
     required this.launchExternal,
     this.breakLongLinks = false,
     this.style,
@@ -553,8 +580,14 @@ class _PinnedMessageText extends StatelessWidget {
       for (final fragment in fragments) {
         final emote = fragment.emote;
         if (emote != null) {
+          final resolvedEmote = emoteToObject[emote.text];
           spans.add(
-            _PinnedEmoteSpan(emote: emote, launchExternal: launchExternal),
+            _PinnedEmoteSpan(
+              text: emote.text,
+              imageUrl: resolvedEmote?.url ?? emote.imageUrl,
+              emote: resolvedEmote,
+              launchExternal: launchExternal,
+            ),
           );
         } else {
           _addLinkedTextSpans(context, spans, fragment.text);
@@ -619,7 +652,7 @@ class _PinnedMessageText extends StatelessWidget {
     }
 
     if (cursor < source.length) {
-      spans.add(TextSpan(text: source.substring(cursor), style: style));
+      _addNonLinkSpans(spans, source.substring(cursor));
     }
   }
 
@@ -633,13 +666,38 @@ class _PinnedMessageText extends StatelessWidget {
     if (breakBeforeLink && !text.endsWith('\n')) {
       final trimmedText = text.trimRight();
       if (trimmedText.isNotEmpty) {
-        spans.add(TextSpan(text: trimmedText, style: style));
+        _addNonLinkSpans(spans, trimmedText);
       }
       spans.add(TextSpan(text: '\n', style: style));
       return;
     }
 
-    spans.add(TextSpan(text: text, style: style));
+    _addNonLinkSpans(spans, text);
+  }
+
+  void _addNonLinkSpans(List<InlineSpan> spans, String source) {
+    for (final match in RegExp(r'\s+|\S+').allMatches(source)) {
+      final token = match.group(0)!;
+      if (token.trim().isEmpty) {
+        spans.add(TextSpan(text: token, style: style));
+        continue;
+      }
+
+      final emote = emoteToObject[token];
+      if (emote == null) {
+        spans.add(TextSpan(text: token, style: style));
+        continue;
+      }
+
+      spans.add(
+        _PinnedEmoteSpan(
+          text: emote.name,
+          imageUrl: emote.url,
+          emote: emote,
+          launchExternal: launchExternal,
+        ),
+      );
+    }
   }
 
   void _addLineBreakBeforeLink(List<InlineSpan> spans) {
@@ -663,22 +721,37 @@ class _PinnedMessageText extends StatelessWidget {
 
 class _PinnedEmoteSpan extends WidgetSpan {
   _PinnedEmoteSpan({
-    required PinnedChatEmote emote,
+    required String text,
+    required String imageUrl,
+    required Emote? emote,
     required bool launchExternal,
   }) : super(
          alignment: PlaceholderAlignment.middle,
          child: Builder(
            builder: (context) => InkWell(
-             onTap: () => IRCMessage.showEmoteDetailsBottomSheet(
-               context,
-               emote: emote.toEmote(),
-               launchExternal: launchExternal,
-             ),
+             onTap: () {
+               if (emote != null) {
+                 IRCMessage.showEmoteDetailsBottomSheet(
+                   context,
+                   emote: emote,
+                   launchExternal: launchExternal,
+                 );
+                 return;
+               }
+
+               IRCMessage.showImageAssetDetailsBottomSheet(
+                 context,
+                 imageUrl: imageUrl,
+                 title: text,
+                 subtitle: const Text('Twitch emote'),
+                 launchExternal: launchExternal,
+               );
+             },
              child: Semantics(
-               label: emote.text,
+               label: text,
                button: true,
                child: FrostyCachedNetworkImage(
-                 imageUrl: emote.imageUrl,
+                 imageUrl: imageUrl,
                  width: defaultEmoteSize,
                  height: defaultEmoteSize,
                  useFade: false,
@@ -731,21 +804,32 @@ bool _isAuthorityBadgeLabel(String label) {
 }
 
 List<Widget> _pinnedBadgeWidgets(
+  BuildContext context,
   List<ChatBadge> badges, {
   required double size,
+  required bool launchExternal,
 }) {
   return [
     for (final badge in badges)
       Padding(
         padding: const EdgeInsets.only(right: 3),
-        child: Semantics(
-          label: badge.name,
-          child: FrostyCachedNetworkImage(
-            imageUrl: badge.url,
-            width: size,
-            height: size,
-            useFade: false,
-            placeholder: (context, url) => SizedBox(width: size, height: size),
+        child: InkWell(
+          onTap: () => IRCMessage.showBadgeDetailsBottomSheet(
+            context,
+            badge: badge,
+            launchExternal: launchExternal,
+          ),
+          child: Semantics(
+            label: badge.name,
+            button: true,
+            child: FrostyCachedNetworkImage(
+              imageUrl: badge.url,
+              width: size,
+              height: size,
+              useFade: false,
+              placeholder: (context, url) =>
+                  SizedBox(width: size, height: size),
+            ),
           ),
         ),
       ),

@@ -1,5 +1,4 @@
 import 'package:frosty/models/badges.dart';
-import 'package:frosty/models/emotes.dart';
 
 const _twitchEmoteBaseUrl = 'https://static-cdn.jtvnw.net/emoticons/v2';
 const _twitchEmoteModeSuffix = '/default/dark/3.0';
@@ -515,13 +514,6 @@ class PinnedChatEmote {
 
   String get imageUrl =>
       _imageUrl ?? '$_twitchEmoteBaseUrl/$id$_twitchEmoteModeSuffix';
-
-  Emote toEmote() => Emote(
-    name: text,
-    zeroWidth: false,
-    url: imageUrl,
-    type: EmoteType.twitchSub,
-  );
 }
 
 class PinnedChatBadge {

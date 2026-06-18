@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frosty/models/badges.dart';
+import 'package:frosty/models/emotes.dart';
 import 'package:frosty/models/pinned_chat.dart';
 import 'package:frosty/screens/channel/chat/widgets/pinned_chats_stack.dart';
 import 'package:frosty/theme.dart';
@@ -281,6 +282,48 @@ void main() {
     );
   });
 
+  testWidgets('opens badge details from pinned chat badges', (tester) async {
+    await tester.pumpWidget(
+      _TestApp(
+        child: PinnedChatsStack(
+          pinnedChats: [
+            _pin(
+              id: 'pin-1',
+              messageText: 'Pinned message',
+              senderBadges: const [
+                PinnedChatBadge(
+                  setId: 'subscriber',
+                  version: '12',
+                  title: '12-Month Subscriber',
+                  imageUrl: 'https://static.example/sender-sub.png',
+                ),
+              ],
+            ),
+          ],
+          launchExternal: false,
+          onDismiss: (_) {},
+          onDismissMany: (_) {},
+        ),
+      ),
+    );
+
+    await tester.tap(
+      find
+          .ancestor(
+            of: _findImage('https://static.example/sender-sub.png'),
+            matching: find.byType(InkWell),
+          )
+          .first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('12-Month Subscriber'), findsOneWidget);
+    expect(find.text('Twitch badge'), findsOneWidget);
+    expect(find.text('Copy image URL'), findsOneWidget);
+    expect(find.text('Open in browser'), findsOneWidget);
+    expect(find.text('Copy name'), findsNothing);
+  });
+
   testWidgets('opens emote details from pinned chat emotes', (tester) async {
     await tester.pumpWidget(
       _TestApp(
@@ -297,6 +340,14 @@ void main() {
               ],
             ),
           ],
+          emoteToObject: const {
+            'Kappa': Emote(
+              name: 'Kappa',
+              zeroWidth: false,
+              url: 'https://static.example/kappa-global.png',
+              type: EmoteType.twitchGlobal,
+            ),
+          },
           launchExternal: false,
           onDismiss: (_) {},
           onDismissMany: (_) {},
@@ -307,9 +358,7 @@ void main() {
     await tester.tap(
       find
           .ancestor(
-            of: _findImage(
-              'https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/3.0',
-            ),
+            of: _findImage('https://static.example/kappa-global.png'),
             matching: find.byType(InkWell),
           )
           .first,
@@ -317,9 +366,56 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Kappa'), findsWidgets);
-    expect(find.text('Twitch sub emote'), findsOneWidget);
+    expect(find.text('Twitch global emote'), findsOneWidget);
+    expect(find.text('Twitch sub emote'), findsNothing);
     expect(find.text('Copy name'), findsOneWidget);
     expect(find.text('Open in browser'), findsOneWidget);
+  });
+
+  testWidgets('renders chat asset emotes in pinned chat text', (tester) async {
+    await tester.pumpWidget(
+      _TestApp(
+        child: PinnedChatsStack(
+          pinnedChats: [
+            _pin(
+              id: 'pin-1',
+              messageText: 'hello peepoHey chat',
+              fragments: const [
+                PinnedChatFragment(text: 'hello peepoHey chat'),
+              ],
+            ),
+          ],
+          emoteToObject: const {
+            'peepoHey': Emote(
+              name: 'peepoHey',
+              zeroWidth: false,
+              url: 'https://static.example/peepohey.png',
+              type: EmoteType.sevenTVChannel,
+              ownerDisplayName: 'SevenTV',
+              ownerUsername: 'seventv',
+            ),
+          },
+          launchExternal: false,
+          onDismiss: (_) {},
+          onDismissMany: (_) {},
+        ),
+      ),
+    );
+
+    expect(_findImage('https://static.example/peepohey.png'), findsOneWidget);
+
+    await tester.tap(
+      find
+          .ancestor(
+            of: _findImage('https://static.example/peepohey.png'),
+            matching: find.byType(InkWell),
+          )
+          .first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('peepoHey'), findsWidgets);
+    expect(find.text('7TV channel emote'), findsOneWidget);
   });
 
   testWidgets('breaks leading link fragments when expanded', (tester) async {

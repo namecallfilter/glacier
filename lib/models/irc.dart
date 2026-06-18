@@ -893,6 +893,39 @@ class IRCMessage {
     );
   }
 
+  static void showBadgeDetailsBottomSheet(
+    BuildContext context, {
+    required ChatBadge badge,
+    required bool launchExternal,
+  }) {
+    _showAssetDetailsBottomSheet(
+      context,
+      leading: _createBadgeWidget(badge: badge, size: 56),
+      url: badge.url,
+      title: badge.name,
+      subtitle: Text(badge.type.toString()),
+      launchExternal: launchExternal,
+      showCopyName: false,
+    );
+  }
+
+  static void showImageAssetDetailsBottomSheet(
+    BuildContext context, {
+    required String imageUrl,
+    required String title,
+    required Widget subtitle,
+    required bool launchExternal,
+  }) {
+    _showAssetDetailsBottomSheet(
+      context,
+      leading: FrostyCachedNetworkImage(imageUrl: imageUrl, width: 56),
+      url: imageUrl,
+      title: title,
+      subtitle: subtitle,
+      launchExternal: launchExternal,
+    );
+  }
+
   static void _showAssetDetailsBottomSheet(
     BuildContext context, {
     required Widget leading,

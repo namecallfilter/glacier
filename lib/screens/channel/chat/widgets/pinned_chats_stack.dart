@@ -1,17 +1,23 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:frosty/constants.dart';
 import 'package:frosty/models/pinned_chat.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class PinnedChatsStack extends StatelessWidget {
-  static const collapsedHeight = 108.0;
+  static const topOffset = 10.0;
+  static const collapsedHeight = 96.0;
 
   final List<PinnedChatMessage> pinnedChats;
+  final bool launchExternal;
   final void Function(String id) onDismiss;
   final void Function(Iterable<String> ids) onDismissMany;
 
   const PinnedChatsStack({
     super.key,
     required this.pinnedChats,
+    required this.launchExternal,
     required this.onDismiss,
     required this.onDismissMany,
   });
@@ -30,10 +36,10 @@ class PinnedChatsStack extends StatelessWidget {
         children: [
           for (var i = visibleLayerCount - 1; i >= 1; i--)
             Positioned(
-              left: 12.0 * i,
-              right: 12.0 * i,
-              top: 8.0 * i,
-              child: _PinnedLayerCard(opacity: 1 - (i * 0.18)),
+              left: 10.0 * i,
+              right: 10.0 * i,
+              top: 7.0 * i,
+              child: _PinnedLayerCard(opacity: 1 - (i * 0.2)),
             ),
           Positioned(
             left: 8,
@@ -42,7 +48,8 @@ class PinnedChatsStack extends StatelessWidget {
             child: _PinnedChatCard(
               pin: topPin,
               count: pinnedChats.length,
-              onTap: () => _showPinnedChatsSheet(context),
+              launchExternal: launchExternal,
+              onOpen: () => _showPinnedChatsSheet(context),
               onDismiss: () => onDismiss(topPin.id),
             ),
           ),
@@ -74,6 +81,7 @@ class PinnedChatsStack extends StatelessWidget {
             return SafeArea(
               child: ListView(
                 shrinkWrap: true,
+                padding: const EdgeInsets.only(bottom: 16),
                 children: [
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 16, 8, 8),
@@ -81,7 +89,7 @@ class PinnedChatsStack extends StatelessWidget {
                       children: [
                         Icon(
                           Icons.push_pin_rounded,
-                          color: Theme.of(context).colorScheme.primary,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
                         const SizedBox(width: 8),
                         const Expanded(
@@ -113,10 +121,12 @@ class PinnedChatsStack extends StatelessWidget {
                           }
                         });
                       },
-                      title: Text(
-                        pin.messageText,
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
+                      title: _PinnedMessageText(
+                        text: pin.messageText,
+                        launchExternal: launchExternal,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                       subtitle: Text(_pinSubtitle(pin)),
                       secondary: IconButton(
@@ -130,7 +140,7 @@ class PinnedChatsStack extends StatelessWidget {
                       controlAffinity: ListTileControlAffinity.leading,
                     ),
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
@@ -181,16 +191,18 @@ class _PinnedLayerCard extends StatelessWidget {
     return Opacity(
       opacity: opacity,
       child: Container(
-        height: 78,
+        height: 70,
         decoration: BoxDecoration(
-          color: colorScheme.surfaceContainerHigh,
+          color: _pinnedSurfaceColor(context, emphasis: 0.75),
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: colorScheme.outlineVariant),
+          border: Border.all(
+            color: colorScheme.outlineVariant.withValues(alpha: 0.45),
+          ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.12),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
+              color: Colors.black.withValues(alpha: 0.10),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
             ),
           ],
         ),
@@ -202,44 +214,50 @@ class _PinnedLayerCard extends StatelessWidget {
 class _PinnedChatCard extends StatelessWidget {
   final PinnedChatMessage pin;
   final int count;
-  final VoidCallback onTap;
+  final bool launchExternal;
+  final VoidCallback onOpen;
   final VoidCallback onDismiss;
 
   const _PinnedChatCard({
     required this.pin,
     required this.count,
-    required this.onTap,
+    required this.launchExternal,
+    required this.onOpen,
     required this.onDismiss,
   });
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final headerStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
-      color: colorScheme.onSurfaceVariant,
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isLongPin = _shouldMinimize(pin.messageText);
+    final headerStyle = theme.textTheme.labelMedium?.copyWith(
+      color: colorScheme.onSurfaceVariant.withValues(alpha: 0.86),
       fontWeight: FontWeight.w700,
     );
 
     return Material(
-      color: colorScheme.surfaceContainerHighest,
-      elevation: 4,
-      shadowColor: Colors.black.withValues(alpha: 0.18),
+      color: _pinnedSurfaceColor(context),
+      elevation: 2,
+      shadowColor: Colors.black.withValues(alpha: 0.14),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
-        side: BorderSide(color: colorScheme.outlineVariant),
+        side: BorderSide(
+          color: colorScheme.outlineVariant.withValues(alpha: 0.55),
+        ),
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: onTap,
+        onTap: onOpen,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
+          padding: const EdgeInsets.fromLTRB(12, 9, 6, 9),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Icon(
                 Icons.push_pin_rounded,
                 size: 18,
-                color: colorScheme.primary,
+                color: colorScheme.onSurfaceVariant.withValues(alpha: 0.92),
               ),
               const SizedBox(width: 8),
               Expanded(
@@ -258,49 +276,45 @@ class _PinnedChatCard extends StatelessWidget {
                           ),
                         ),
                         if (count > 1)
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: colorScheme.primaryContainer,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(
-                              '$count pinned',
-                              style: Theme.of(context).textTheme.labelSmall
-                                  ?.copyWith(
-                                    color: colorScheme.onPrimaryContainer,
-                                    fontFeatures: const [
-                                      FontFeature.tabularFigures(),
-                                    ],
-                                  ),
-                            ),
-                          ),
+                          _PinnedCountChip(count: count)
+                        else if (isLongPin)
+                          _PinnedMinimizedLabel(),
                       ],
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      pin.messageText,
-                      maxLines: 2,
+                    _PinnedMessageText(
+                      text: pin.messageText,
+                      launchExternal: launchExternal,
+                      maxLines: isLongPin ? 1 : 2,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: colorScheme.onSurface,
                         fontWeight: FontWeight.w700,
+                        height: 1.24,
                       ),
                     ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 5),
                     Text(
                       _senderLine(pin),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant.withValues(
+                          alpha: 0.78,
+                        ),
                       ),
                     ),
                   ],
                 ),
               ),
+              if (count > 1 || isLongPin)
+                IconButton(
+                  onPressed: onOpen,
+                  icon: const Icon(Icons.keyboard_arrow_down_rounded),
+                  tooltip: 'Open pinned chats',
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 20,
+                ),
               IconButton(
                 onPressed: onDismiss,
                 icon: const Icon(Icons.close_rounded),
@@ -323,4 +337,160 @@ class _PinnedChatCard extends StatelessWidget {
         ? pin.senderDisplayName
         : '${pin.senderDisplayName} sent at $sentAt';
   }
+
+  bool _shouldMinimize(String text) {
+    return text.length > 92 || text.contains('\n');
+  }
+}
+
+class _PinnedCountChip extends StatelessWidget {
+  final int count;
+
+  const _PinnedCountChip({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.68),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: colorScheme.outlineVariant.withValues(alpha: 0.45),
+        ),
+      ),
+      child: Text(
+        '$count pinned',
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: colorScheme.onSurfaceVariant,
+          fontFeatures: const [FontFeature.tabularFigures()],
+        ),
+      ),
+    );
+  }
+}
+
+class _PinnedMinimizedLabel extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Text(
+      'Minimized',
+      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+        color: colorScheme.onSurfaceVariant.withValues(alpha: 0.74),
+      ),
+    );
+  }
+}
+
+class _PinnedMessageText extends StatelessWidget {
+  final String text;
+  final bool launchExternal;
+  final TextStyle? style;
+  final int? maxLines;
+  final TextOverflow overflow;
+
+  const _PinnedMessageText({
+    required this.text,
+    required this.launchExternal,
+    this.style,
+    this.maxLines,
+    this.overflow = TextOverflow.clip,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Text.rich(
+      TextSpan(children: _buildSpans(context)),
+      maxLines: maxLines,
+      overflow: overflow,
+    );
+  }
+
+  List<InlineSpan> _buildSpans(BuildContext context) {
+    final spans = <InlineSpan>[];
+    final linkColor = Theme.of(context).colorScheme.primary;
+    var cursor = 0;
+
+    for (final match in regexLink.allMatches(text)) {
+      if (match.start > cursor) {
+        spans.add(
+          TextSpan(text: text.substring(cursor, match.start), style: style),
+        );
+      }
+
+      final rawLink = match.group(0)!;
+      final trimmedLink = _trimTrailingLinkPunctuation(rawLink);
+      spans.add(
+        TextSpan(
+          text: trimmedLink,
+          style: style?.copyWith(
+            color: linkColor,
+            decoration: TextDecoration.underline,
+            decorationColor: linkColor,
+          ),
+          recognizer: TapGestureRecognizer()
+            ..onTap = () => _launchPinnedChatLink(trimmedLink, launchExternal),
+        ),
+      );
+
+      if (trimmedLink.length < rawLink.length) {
+        spans.add(
+          TextSpan(text: rawLink.substring(trimmedLink.length), style: style),
+        );
+      }
+
+      cursor = match.end;
+    }
+
+    if (cursor < text.length) {
+      spans.add(TextSpan(text: text.substring(cursor), style: style));
+    }
+
+    if (spans.isEmpty) {
+      return [TextSpan(text: text, style: style)];
+    }
+
+    return spans;
+  }
+}
+
+Color _pinnedSurfaceColor(BuildContext context, {double emphasis = 1}) {
+  final theme = Theme.of(context);
+  final colorScheme = theme.colorScheme;
+  final background = theme.scaffoldBackgroundColor.a == 0
+      ? colorScheme.surface
+      : theme.scaffoldBackgroundColor;
+  final alpha = theme.brightness == Brightness.dark ? 0.12 : 0.05;
+
+  return Color.alphaBlend(
+    colorScheme.onSurface.withValues(alpha: alpha * emphasis),
+    background,
+  );
+}
+
+String _trimTrailingLinkPunctuation(String link) {
+  var end = link.length;
+  while (end > 0 && '|.,!?;:)]}'.contains(link[end - 1])) {
+    end--;
+  }
+  return link.substring(0, end);
+}
+
+Uri _uriForPinnedChatLink(String link) {
+  final uri = Uri.parse(link);
+  if (uri.hasScheme) return uri;
+  return Uri.parse('https://$link');
+}
+
+Future<void> _launchPinnedChatLink(String link, bool launchExternal) {
+  return launchUrl(
+    _uriForPinnedChatLink(link),
+    mode: launchExternal
+        ? LaunchMode.externalApplication
+        : LaunchMode.inAppBrowserView,
+  );
 }

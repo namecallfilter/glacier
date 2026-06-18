@@ -90,7 +90,8 @@ class Chat extends StatelessWidget {
                                 chatStore.settings.showUserNotices &&
                                 chatStore.pinnedChats.isNotEmpty;
                             final pinnedChatsHeight = showPinnedChats
-                                ? PinnedChatsStack.collapsedHeight
+                                ? PinnedChatsStack.topOffset +
+                                      PinnedChatsStack.collapsedHeight
                                 : 0.0;
 
                             return FrostyScrollbar(
@@ -235,9 +236,10 @@ class Chat extends StatelessWidget {
             return Positioned(
               left: 0,
               right: 0,
-              top: topOffset,
+              top: topOffset + PinnedChatsStack.topOffset,
               child: PinnedChatsStack(
                 pinnedChats: chatStore.pinnedChats.toList(),
+                launchExternal: chatStore.settings.launchUrlExternal,
                 onDismiss: chatStore.dismissPinnedChat,
                 onDismissMany: chatStore.dismissPinnedChats,
               ),

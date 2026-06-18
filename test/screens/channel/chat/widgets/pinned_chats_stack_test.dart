@@ -1,9 +1,32 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frosty/models/pinned_chat.dart';
 import 'package:frosty/screens/channel/chat/widgets/pinned_chats_stack.dart';
+import 'package:frosty/theme.dart';
 
 void main() {
+  const urlLauncherChannel = MethodChannel('plugins.flutter.io/url_launcher');
+  MethodCall? urlLauncherCall;
+
+  setUp(() {
+    urlLauncherCall = null;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(urlLauncherChannel, (call) async {
+          if (call.method == 'launch') {
+            urlLauncherCall = call;
+            return true;
+          }
+          return false;
+        });
+  });
+
+  tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(urlLauncherChannel, null);
+  });
+
   testWidgets('shows collapsed pinned chat stack with count', (tester) async {
     await tester.pumpWidget(
       _TestApp(
@@ -12,6 +35,7 @@ void main() {
             _pin(id: 'pin-1', messageText: 'First pinned message'),
             _pin(id: 'pin-2', messageText: 'Second pinned message'),
           ],
+          launchExternal: false,
           onDismiss: (_) {},
           onDismissMany: (_) {},
         ),
@@ -33,6 +57,7 @@ void main() {
             _pin(id: 'pin-1', messageText: 'First pinned message'),
             _pin(id: 'pin-2', messageText: 'Second pinned message'),
           ],
+          launchExternal: false,
           onDismiss: (_) {},
           onDismissMany: dismissedIds.addAll,
         ),
@@ -54,6 +79,66 @@ void main() {
 
     expect(dismissedIds, ['pin-1', 'pin-2']);
   });
+
+  testWidgets('styles and launches links in pinned chat text', (tester) async {
+    await tester.pumpWidget(
+      _TestApp(
+        child: PinnedChatsStack(
+          pinnedChats: [
+            _pin(id: 'pin-1', messageText: 'Join discord.gg/Rtf6DuQAag now'),
+          ],
+          launchExternal: false,
+          onDismiss: (_) {},
+          onDismissMany: (_) {},
+        ),
+      ),
+    );
+
+    final theme = Theme.of(tester.element(find.byType(PinnedChatsStack)));
+    final linkSpan = _findTextSpan('discord.gg/Rtf6DuQAag');
+
+    expect(linkSpan.style?.color, theme.colorScheme.primary);
+    expect(linkSpan.style?.decoration, TextDecoration.underline);
+    expect(linkSpan.style?.decorationColor, theme.colorScheme.primary);
+    expect(linkSpan.recognizer, isA<TapGestureRecognizer>());
+
+    (linkSpan.recognizer! as TapGestureRecognizer).onTap!();
+    await tester.pump();
+
+    final launchArguments = urlLauncherCall!.arguments as Map<Object?, Object?>;
+    expect(launchArguments['url'], 'https://discord.gg/Rtf6DuQAag');
+    expect(launchArguments['useWebView'], isTrue);
+  });
+
+  testWidgets('minimizes long pinned chats and opens the full pin list', (
+    tester,
+  ) async {
+    const longMessage =
+        'M3 LINKS -> Discord: discord.gg/mar3lg | X: x.com/communities/1926380245063520455 | Snapchat: https://www.snapchat.com/add/marlonluga | YouTube: youtube.com/@mar3lg';
+
+    await tester.pumpWidget(
+      _TestApp(
+        child: PinnedChatsStack(
+          pinnedChats: [_pin(id: 'pin-1', messageText: longMessage)],
+          launchExternal: false,
+          onDismiss: (_) {},
+          onDismissMany: (_) {},
+        ),
+      ),
+    );
+
+    expect(find.byTooltip('Open pinned chats'), findsOneWidget);
+
+    final previewRichText = _findRichTextContaining('M3 LINKS');
+    expect(previewRichText.maxLines, 1);
+    expect(previewRichText.overflow, TextOverflow.ellipsis);
+
+    await tester.tap(find.byTooltip('Open pinned chats'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Pinned chats'), findsOneWidget);
+    expect(_richTextContains(longMessage), isTrue);
+  });
 }
 
 class _TestApp extends StatelessWidget {
@@ -64,6 +149,7 @@ class _TestApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      theme: const FrostyThemes(colorSchemeSeed: Color(0xFF9146FF)).dark,
       home: Scaffold(
         body: Align(
           alignment: Alignment.topCenter,
@@ -83,3 +169,43 @@ PinnedChatMessage _pin({required String id, required String messageText}) =>
       pinnedByDisplayName: 'ModName',
       sentAt: DateTime.parse('2026-06-18T09:40:00Z'),
     );
+
+TextSpan _findTextSpan(String text) {
+  for (final richText in find.byType(RichText).evaluate()) {
+    final widget = richText.widget as RichText;
+    final span = _findTextSpanIn(widget.text, text);
+    if (span != null) return span;
+  }
+
+  throw StateError('No TextSpan found for "$text"');
+}
+
+TextSpan? _findTextSpanIn(InlineSpan span, String text) {
+  if (span is TextSpan) {
+    if (span.text == text) return span;
+
+    for (final child in span.children ?? const <InlineSpan>[]) {
+      final found = _findTextSpanIn(child, text);
+      if (found != null) return found;
+    }
+  }
+
+  return null;
+}
+
+RichText _findRichTextContaining(String text) {
+  for (final richText in find.byType(RichText).evaluate()) {
+    final widget = richText.widget as RichText;
+    if (widget.text.toPlainText().contains(text)) return widget;
+  }
+
+  throw StateError('No RichText found containing "$text"');
+}
+
+bool _richTextContains(String text) {
+  return find
+      .byType(RichText)
+      .evaluate()
+      .map((element) => element.widget as RichText)
+      .any((widget) => widget.text.toPlainText().contains(text));
+}

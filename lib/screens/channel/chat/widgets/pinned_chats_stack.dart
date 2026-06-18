@@ -167,7 +167,7 @@ class _PinnedChatCard extends StatelessWidget {
                           emoteToObject: emoteToObject,
                           launchExternal: launchExternal,
                           breakLongLinks: isExpanded,
-                          maxLines: isExpanded ? 5 : 1,
+                          maxLines: isExpanded ? null : 1,
                           overflow: isExpanded
                               ? TextOverflow.clip
                               : TextOverflow.ellipsis,

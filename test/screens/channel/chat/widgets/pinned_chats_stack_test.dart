@@ -519,7 +519,7 @@ void main() {
     expect(find.textContaining('SenderName'), findsOneWidget);
 
     final previewRichText = _findRichTextContaining('PartyPopper');
-    expect(previewRichText.maxLines, greaterThan(1));
+    expect(previewRichText.maxLines, isNull);
     expect(previewRichText.text.toPlainText(), contains('subs!\nhttps://'));
 
     await tester.tap(find.byTooltip('Collapse pinned chat'));
@@ -535,7 +535,7 @@ void main() {
     }
 
     expect(find.byTooltip('Collapse pinned chat'), findsOneWidget);
-    expect(_findRichTextContaining('PartyPopper').maxLines, greaterThan(1));
+    expect(_findRichTextContaining('PartyPopper').maxLines, isNull);
     expect(find.textContaining('SenderName'), findsOneWidget);
   });
 
@@ -557,7 +557,7 @@ void main() {
 
     expect(find.byTooltip('Collapse pinned chat'), findsOneWidget);
     expect(find.byTooltip('Expand pinned chat'), findsNothing);
-    expect(_findRichTextContaining('M3 LINKS').maxLines, greaterThan(1));
+    expect(_findRichTextContaining('M3 LINKS').maxLines, isNull);
     expect(find.textContaining('SenderName'), findsOneWidget);
 
     await tester.tap(find.byTooltip('Collapse pinned chat'));
@@ -567,6 +567,54 @@ void main() {
     expect(find.byTooltip('Collapse pinned chat'), findsNothing);
     expect(_findRichTextContaining('M3 LINKS').maxLines, 1);
     expect(find.textContaining('SenderName'), findsNothing);
+  });
+
+  testWidgets('shows the full expanded pinned message in a narrow chat', (
+    tester,
+  ) async {
+    const longMessage =
+        'FREE TWITCH SUB FOR NO ADS AND EMOTES -> Go to https://twitch.tv/prime and subscribe here: twitch.tv/subs/mooda';
+
+    await tester.pumpWidget(
+      _TestApp(
+        width: 240,
+        child: PinnedChatsStack(
+          pinnedChats: [
+            _pin(
+              id: 'pin-1',
+              messageText: longMessage,
+              senderDisplayName: 'Fossabot',
+              pinnedByDisplayName: 'popcorn643',
+              pinnedByBadges: const [
+                PinnedChatBadge(
+                  setId: 'moderator',
+                  version: '1',
+                  title: 'Moderator',
+                  imageUrl: 'https://static.example/pinner-mod.png',
+                ),
+              ],
+              senderBadges: const [
+                PinnedChatBadge(
+                  setId: 'moderator',
+                  version: '1',
+                  title: 'Moderator',
+                  imageUrl: 'https://static.example/sender-mod.png',
+                ),
+              ],
+            ),
+          ],
+          launchExternal: false,
+          onDismiss: (_) {},
+        ),
+      ),
+    );
+
+    expect(tester.takeException(), isNull);
+    expect(
+      _findRenderParagraphContaining('FREE TWITCH SUB').didExceedMaxLines,
+      isFalse,
+    );
+    expect(find.textContaining('Fossabot'), findsOneWidget);
   });
 
   testWidgets('does not overflow in a skinny side chat width', (tester) async {
@@ -820,6 +868,18 @@ RichText _findRichTextContaining(String text) {
   }
 
   throw StateError('No RichText found containing "$text"');
+}
+
+RenderParagraph _findRenderParagraphContaining(String text) {
+  for (final richText in find.byType(RichText).evaluate()) {
+    final widget = richText.widget as RichText;
+    if (!widget.text.toPlainText().contains(text)) continue;
+
+    final renderObject = richText.renderObject;
+    if (renderObject is RenderParagraph) return renderObject;
+  }
+
+  throw StateError('No RenderParagraph found containing "$text"');
 }
 
 List<RichText> _findRichTextsContaining(String text) {

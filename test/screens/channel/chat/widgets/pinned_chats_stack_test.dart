@@ -198,6 +198,47 @@ void main() {
     );
   });
 
+  testWidgets('opens emote details from pinned chat emotes', (tester) async {
+    await tester.pumpWidget(
+      _TestApp(
+        child: PinnedChatsStack(
+          pinnedChats: [
+            _pin(
+              id: 'pin-1',
+              messageText: 'Kappa',
+              fragments: const [
+                PinnedChatFragment(
+                  text: 'Kappa',
+                  emote: PinnedChatEmote(id: '25', text: 'Kappa'),
+                ),
+              ],
+            ),
+          ],
+          launchExternal: false,
+          onDismiss: (_) {},
+          onDismissMany: (_) {},
+        ),
+      ),
+    );
+
+    await tester.tap(
+      find
+          .ancestor(
+            of: _findImage(
+              'https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/3.0',
+            ),
+            matching: find.byType(InkWell),
+          )
+          .first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Kappa'), findsWidgets);
+    expect(find.text('Twitch sub emote'), findsOneWidget);
+    expect(find.text('Copy name'), findsOneWidget);
+    expect(find.text('Open in browser'), findsOneWidget);
+  });
+
   testWidgets('breaks leading link fragments when expanded', (tester) async {
     const message =
         'PartyPopper 50% off on all subs! https://www.twitch.tv/subs/marlon';

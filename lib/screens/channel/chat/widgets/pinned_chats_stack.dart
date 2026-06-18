@@ -2,6 +2,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:frosty/constants.dart';
 import 'package:frosty/models/badges.dart';
+import 'package:frosty/models/irc.dart';
 import 'package:frosty/models/pinned_chat.dart';
 import 'package:frosty/widgets/frosty_cached_network_image.dart';
 import 'package:intl/intl.dart';
@@ -548,7 +549,9 @@ class _PinnedMessageText extends StatelessWidget {
       for (final fragment in fragments) {
         final emote = fragment.emote;
         if (emote != null) {
-          spans.add(_PinnedEmoteSpan(emote: emote));
+          spans.add(
+            _PinnedEmoteSpan(emote: emote, launchExternal: launchExternal),
+          );
         } else {
           _addLinkedTextSpans(context, spans, fragment.text);
         }
@@ -655,19 +658,33 @@ class _PinnedMessageText extends StatelessWidget {
 }
 
 class _PinnedEmoteSpan extends WidgetSpan {
-  _PinnedEmoteSpan({required PinnedChatEmote emote})
-    : super(
-        alignment: PlaceholderAlignment.middle,
-        child: Semantics(
-          label: emote.text,
-          child: FrostyCachedNetworkImage(
-            imageUrl: emote.imageUrl,
-            height: defaultEmoteSize,
-            useFade: false,
-            placeholder: (context, url) => const SizedBox(),
-          ),
-        ),
-      );
+  _PinnedEmoteSpan({
+    required PinnedChatEmote emote,
+    required bool launchExternal,
+  }) : super(
+         alignment: PlaceholderAlignment.middle,
+         child: Builder(
+           builder: (context) => InkWell(
+             onTap: () => IRCMessage.showEmoteDetailsBottomSheet(
+               context,
+               emote: emote.toEmote(),
+               launchExternal: launchExternal,
+             ),
+             child: Semantics(
+               label: emote.text,
+               button: true,
+               child: FrostyCachedNetworkImage(
+                 imageUrl: emote.imageUrl,
+                 width: defaultEmoteSize,
+                 height: defaultEmoteSize,
+                 useFade: false,
+                 placeholder: (context, url) =>
+                     SizedBox.square(dimension: defaultEmoteSize),
+               ),
+             ),
+           ),
+         ),
+       );
 }
 
 List<ChatBadge> _resolvedPinnedBadges(

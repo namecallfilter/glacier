@@ -30,6 +30,10 @@ void main() {
         .setMockMethodCallHandler(urlLauncherChannel, null);
   });
 
+  test('keeps pinned chat close to the top of the chat area', () {
+    expect(PinnedChatsStack.topOffset, 5);
+  });
+
   testWidgets('shows collapsed pinned chat stack with count', (tester) async {
     await tester.pumpWidget(
       _TestApp(

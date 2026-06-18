@@ -10,7 +10,7 @@ import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class PinnedChatsStack extends StatefulWidget {
-  static const topOffset = 10.0;
+  static const topOffset = 5.0;
   static const collapsedHeight = 96.0;
   static const expandedHeight = 154.0;
 

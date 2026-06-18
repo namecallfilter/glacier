@@ -5,9 +5,10 @@ import 'package:frosty/models/pinned_chat.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-class PinnedChatsStack extends StatelessWidget {
+class PinnedChatsStack extends StatefulWidget {
   static const topOffset = 10.0;
   static const collapsedHeight = 96.0;
+  static const expandedHeight = 154.0;
 
   final List<PinnedChatMessage> pinnedChats;
   final bool launchExternal;
@@ -23,39 +24,78 @@ class PinnedChatsStack extends StatelessWidget {
   });
 
   @override
+  State<PinnedChatsStack> createState() => _PinnedChatsStackState();
+}
+
+class _PinnedChatsStackState extends State<PinnedChatsStack> {
+  final _toggledPinIds = <String>{};
+
+  @override
+  void didUpdateWidget(PinnedChatsStack oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final visiblePinIds = widget.pinnedChats.map((pin) => pin.id).toSet();
+    _toggledPinIds.removeWhere((id) => !visiblePinIds.contains(id));
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (pinnedChats.isEmpty) return const SizedBox.shrink();
+    if (widget.pinnedChats.isEmpty) return const SizedBox.shrink();
 
-    final visibleLayerCount = pinnedChats.length.clamp(1, 3);
-    final topPin = pinnedChats.first;
+    final visibleLayerCount = widget.pinnedChats.length.clamp(1, 3);
+    final topPin = widget.pinnedChats.first;
+    final canToggleTopPin = _canTogglePinnedChat(topPin.messageText);
+    final startsMinimized = _shouldStartMinimized(topPin.messageText);
+    final isToggled = _toggledPinIds.contains(topPin.id);
+    final isTopPinExpanded =
+        canToggleTopPin && (startsMinimized ? isToggled : !isToggled);
+    final stackHeight = isTopPinExpanded
+        ? PinnedChatsStack.expandedHeight
+        : PinnedChatsStack.collapsedHeight;
 
-    return SizedBox(
-      height: collapsedHeight,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          for (var i = visibleLayerCount - 1; i >= 1; i--)
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 160),
+      curve: Curves.easeOutCubic,
+      child: SizedBox(
+        height: stackHeight,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            for (var i = visibleLayerCount - 1; i >= 1; i--)
+              Positioned(
+                left: 10.0 * i,
+                right: 10.0 * i,
+                top: 7.0 * i,
+                child: _PinnedLayerCard(opacity: 1 - (i * 0.2)),
+              ),
             Positioned(
-              left: 10.0 * i,
-              right: 10.0 * i,
-              top: 7.0 * i,
-              child: _PinnedLayerCard(opacity: 1 - (i * 0.2)),
+              left: 8,
+              right: 8,
+              top: 0,
+              child: _PinnedChatCard(
+                pin: topPin,
+                count: widget.pinnedChats.length,
+                launchExternal: widget.launchExternal,
+                canToggle: canToggleTopPin,
+                isExpanded: isTopPinExpanded,
+                onToggle: () => _togglePinnedChat(topPin),
+                onOpen: () => _showPinnedChatsSheet(context),
+                onDismiss: () => widget.onDismiss(topPin.id),
+              ),
             ),
-          Positioned(
-            left: 8,
-            right: 8,
-            top: 0,
-            child: _PinnedChatCard(
-              pin: topPin,
-              count: pinnedChats.length,
-              launchExternal: launchExternal,
-              onOpen: () => _showPinnedChatsSheet(context),
-              onDismiss: () => onDismiss(topPin.id),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
+  }
+
+  void _togglePinnedChat(PinnedChatMessage pin) {
+    setState(() {
+      if (_toggledPinIds.contains(pin.id)) {
+        _toggledPinIds.remove(pin.id);
+      } else {
+        _toggledPinIds.add(pin.id);
+      }
+    });
   }
 
   void _showPinnedChatsSheet(BuildContext context) {
@@ -69,12 +109,12 @@ class PinnedChatsStack extends StatelessWidget {
           builder: (context, setModalState) {
             void dismissSelected() {
               if (selectedPinIds.isEmpty) return;
-              onDismissMany(selectedPinIds.toList());
+              widget.onDismissMany(selectedPinIds.toList());
               Navigator.pop(context);
             }
 
             void dismissAll() {
-              onDismissMany(pinnedChats.map((pin) => pin.id).toList());
+              widget.onDismissMany(widget.pinnedChats.map((pin) => pin.id));
               Navigator.pop(context);
             }
 
@@ -109,7 +149,7 @@ class PinnedChatsStack extends StatelessWidget {
                       ],
                     ),
                   ),
-                  for (final pin in pinnedChats)
+                  for (final pin in widget.pinnedChats)
                     CheckboxListTile(
                       value: selectedPinIds.contains(pin.id),
                       onChanged: (selected) {
@@ -123,7 +163,8 @@ class PinnedChatsStack extends StatelessWidget {
                       },
                       title: _PinnedMessageText(
                         text: pin.messageText,
-                        launchExternal: launchExternal,
+                        launchExternal: widget.launchExternal,
+                        breakLongLinks: _canTogglePinnedChat(pin.messageText),
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),
@@ -131,7 +172,7 @@ class PinnedChatsStack extends StatelessWidget {
                       subtitle: Text(_pinSubtitle(pin)),
                       secondary: IconButton(
                         onPressed: () {
-                          onDismiss(pin.id);
+                          widget.onDismiss(pin.id);
                           Navigator.pop(context);
                         },
                         icon: const Icon(Icons.close_rounded),
@@ -215,6 +256,9 @@ class _PinnedChatCard extends StatelessWidget {
   final PinnedChatMessage pin;
   final int count;
   final bool launchExternal;
+  final bool canToggle;
+  final bool isExpanded;
+  final VoidCallback onToggle;
   final VoidCallback onOpen;
   final VoidCallback onDismiss;
 
@@ -222,6 +266,9 @@ class _PinnedChatCard extends StatelessWidget {
     required this.pin,
     required this.count,
     required this.launchExternal,
+    required this.canToggle,
+    required this.isExpanded,
+    required this.onToggle,
     required this.onOpen,
     required this.onDismiss,
   });
@@ -230,7 +277,6 @@ class _PinnedChatCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final isLongPin = _shouldMinimize(pin.messageText);
     final headerStyle = theme.textTheme.labelMedium?.copyWith(
       color: colorScheme.onSurfaceVariant.withValues(alpha: 0.86),
       fontWeight: FontWeight.w700,
@@ -275,18 +321,18 @@ class _PinnedChatCard extends StatelessWidget {
                             style: headerStyle,
                           ),
                         ),
-                        if (count > 1)
-                          _PinnedCountChip(count: count)
-                        else if (isLongPin)
-                          _PinnedMinimizedLabel(),
+                        if (count > 1) _PinnedCountChip(count: count),
                       ],
                     ),
                     const SizedBox(height: 4),
                     _PinnedMessageText(
                       text: pin.messageText,
                       launchExternal: launchExternal,
-                      maxLines: isLongPin ? 1 : 2,
-                      overflow: TextOverflow.ellipsis,
+                      breakLongLinks: isExpanded,
+                      maxLines: canToggle ? (isExpanded ? 5 : 1) : 2,
+                      overflow: canToggle && !isExpanded
+                          ? TextOverflow.ellipsis
+                          : TextOverflow.clip,
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: colorScheme.onSurface,
                         fontWeight: FontWeight.w700,
@@ -307,7 +353,21 @@ class _PinnedChatCard extends StatelessWidget {
                   ],
                 ),
               ),
-              if (count > 1 || isLongPin)
+              if (canToggle)
+                IconButton(
+                  onPressed: onToggle,
+                  icon: Icon(
+                    isExpanded
+                        ? Icons.keyboard_arrow_up_rounded
+                        : Icons.keyboard_arrow_down_rounded,
+                  ),
+                  tooltip: isExpanded
+                      ? 'Collapse pinned chat'
+                      : 'Expand pinned chat',
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 20,
+                )
+              else if (count > 1)
                 IconButton(
                   onPressed: onOpen,
                   icon: const Icon(Icons.keyboard_arrow_down_rounded),
@@ -336,10 +396,6 @@ class _PinnedChatCard extends StatelessWidget {
     return sentAt == null
         ? pin.senderDisplayName
         : '${pin.senderDisplayName} sent at $sentAt';
-  }
-
-  bool _shouldMinimize(String text) {
-    return text.length > 92 || text.contains('\n');
   }
 }
 
@@ -372,23 +428,10 @@ class _PinnedCountChip extends StatelessWidget {
   }
 }
 
-class _PinnedMinimizedLabel extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-
-    return Text(
-      'Minimized',
-      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-        color: colorScheme.onSurfaceVariant.withValues(alpha: 0.74),
-      ),
-    );
-  }
-}
-
 class _PinnedMessageText extends StatelessWidget {
   final String text;
   final bool launchExternal;
+  final bool breakLongLinks;
   final TextStyle? style;
   final int? maxLines;
   final TextOverflow overflow;
@@ -396,6 +439,7 @@ class _PinnedMessageText extends StatelessWidget {
   const _PinnedMessageText({
     required this.text,
     required this.launchExternal,
+    this.breakLongLinks = false,
     this.style,
     this.maxLines,
     this.overflow = TextOverflow.clip,
@@ -416,13 +460,16 @@ class _PinnedMessageText extends StatelessWidget {
     var cursor = 0;
 
     for (final match in regexLink.allMatches(text)) {
-      if (match.start > cursor) {
-        spans.add(
-          TextSpan(text: text.substring(cursor, match.start), style: style),
-        );
-      }
+      final linkStart = _linkStartIncludingScheme(text, match.start);
+      if (linkStart < cursor) continue;
 
-      final rawLink = match.group(0)!;
+      _addPlainSpan(
+        spans,
+        text.substring(cursor, linkStart),
+        breakBeforeLink: breakLongLinks && linkStart > 0,
+      );
+
+      final rawLink = text.substring(linkStart, match.end);
       final trimmedLink = _trimTrailingLinkPunctuation(rawLink);
       spans.add(
         TextSpan(
@@ -456,6 +503,32 @@ class _PinnedMessageText extends StatelessWidget {
 
     return spans;
   }
+
+  void _addPlainSpan(
+    List<InlineSpan> spans,
+    String text, {
+    required bool breakBeforeLink,
+  }) {
+    if (text.isEmpty) return;
+
+    if (breakBeforeLink && !text.endsWith('\n')) {
+      final trimmedText = text.trimRight();
+      if (trimmedText.isNotEmpty) {
+        spans.add(TextSpan(text: trimmedText, style: style));
+      }
+      spans.add(TextSpan(text: '\n', style: style));
+      return;
+    }
+
+    spans.add(TextSpan(text: text, style: style));
+  }
+}
+
+bool _canTogglePinnedChat(String text) =>
+    _shouldStartMinimized(text) || regexLink.hasMatch(text);
+
+bool _shouldStartMinimized(String text) {
+  return text.length > 92 || text.contains('\n');
 }
 
 Color _pinnedSurfaceColor(BuildContext context, {double emphasis = 1}) {
@@ -478,6 +551,17 @@ String _trimTrailingLinkPunctuation(String link) {
     end--;
   }
   return link.substring(0, end);
+}
+
+int _linkStartIncludingScheme(String text, int matchStart) {
+  for (final scheme in const ['https://', 'http://']) {
+    final schemeStart = matchStart - scheme.length;
+    if (schemeStart < 0) continue;
+    final candidate = text.substring(schemeStart, matchStart).toLowerCase();
+    if (candidate == scheme) return schemeStart;
+  }
+
+  return matchStart;
 }
 
 Uri _uriForPinnedChatLink(String link) {

@@ -110,9 +110,76 @@ void main() {
     expect(launchArguments['useWebView'], isTrue);
   });
 
-  testWidgets('minimizes long pinned chats and opens the full pin list', (
+  testWidgets('styles https scheme as part of pinned chat links', (
     tester,
   ) async {
+    await tester.pumpWidget(
+      _TestApp(
+        child: PinnedChatsStack(
+          pinnedChats: [
+            _pin(
+              id: 'pin-1',
+              messageText:
+                  'PartyPopper 50% off on all subs! https://www.twitch.tv/subs/marlon',
+            ),
+          ],
+          launchExternal: false,
+          onDismiss: (_) {},
+          onDismissMany: (_) {},
+        ),
+      ),
+    );
+
+    final theme = Theme.of(tester.element(find.byType(PinnedChatsStack)));
+    final linkSpan = _findTextSpan('https://www.twitch.tv/subs/marlon');
+
+    expect(linkSpan.style?.color, theme.colorScheme.primary);
+    expect(linkSpan.style?.decoration, TextDecoration.underline);
+
+    (linkSpan.recognizer! as TapGestureRecognizer).onTap!();
+    await tester.pump();
+
+    final launchArguments = urlLauncherCall!.arguments as Map<Object?, Object?>;
+    expect(launchArguments['url'], 'https://www.twitch.tv/subs/marlon');
+  });
+
+  testWidgets('starts link pins expanded and toggles them minimized', (
+    tester,
+  ) async {
+    const longMessage =
+        'PartyPopper 50% off on all subs! https://www.twitch.tv/subs/marlon';
+
+    await tester.pumpWidget(
+      _TestApp(
+        child: PinnedChatsStack(
+          pinnedChats: [_pin(id: 'pin-1', messageText: longMessage)],
+          launchExternal: false,
+          onDismiss: (_) {},
+          onDismissMany: (_) {},
+        ),
+      ),
+    );
+
+    expect(find.byTooltip('Collapse pinned chat'), findsOneWidget);
+
+    final previewRichText = _findRichTextContaining('PartyPopper');
+    expect(previewRichText.maxLines, greaterThan(1));
+    expect(previewRichText.text.toPlainText(), contains('subs!\nhttps://'));
+
+    await tester.tap(find.byTooltip('Collapse pinned chat'));
+    await tester.pumpAndSettle();
+
+    expect(find.byTooltip('Expand pinned chat'), findsOneWidget);
+    expect(_findRichTextContaining('PartyPopper').maxLines, 1);
+
+    await tester.tap(find.byTooltip('Expand pinned chat'));
+    await tester.pumpAndSettle();
+
+    expect(find.byTooltip('Collapse pinned chat'), findsOneWidget);
+    expect(_findRichTextContaining('PartyPopper').maxLines, greaterThan(1));
+  });
+
+  testWidgets('starts very long pinned chats minimized', (tester) async {
     const longMessage =
         'M3 LINKS -> Discord: discord.gg/mar3lg | X: x.com/communities/1926380245063520455 | Snapchat: https://www.snapchat.com/add/marlonluga | YouTube: youtube.com/@mar3lg';
 
@@ -127,17 +194,14 @@ void main() {
       ),
     );
 
-    expect(find.byTooltip('Open pinned chats'), findsOneWidget);
+    expect(find.byTooltip('Expand pinned chat'), findsOneWidget);
+    expect(_findRichTextContaining('M3 LINKS').maxLines, 1);
 
-    final previewRichText = _findRichTextContaining('M3 LINKS');
-    expect(previewRichText.maxLines, 1);
-    expect(previewRichText.overflow, TextOverflow.ellipsis);
-
-    await tester.tap(find.byTooltip('Open pinned chats'));
+    await tester.tap(find.byTooltip('Expand pinned chat'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Pinned chats'), findsOneWidget);
-    expect(_richTextContains(longMessage), isTrue);
+    expect(find.byTooltip('Collapse pinned chat'), findsOneWidget);
+    expect(_findRichTextContaining('M3 LINKS').maxLines, greaterThan(1));
   });
 }
 
@@ -200,12 +264,4 @@ RichText _findRichTextContaining(String text) {
   }
 
   throw StateError('No RichText found containing "$text"');
-}
-
-bool _richTextContains(String text) {
-  return find
-      .byType(RichText)
-      .evaluate()
-      .map((element) => element.widget as RichText)
-      .any((widget) => widget.text.toPlainText().contains(text));
 }

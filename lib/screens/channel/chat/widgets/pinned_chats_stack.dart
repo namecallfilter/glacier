@@ -1,7 +1,9 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:frosty/constants.dart';
+import 'package:frosty/models/badges.dart';
 import 'package:frosty/models/pinned_chat.dart';
+import 'package:frosty/widgets/frosty_cached_network_image.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -11,6 +13,7 @@ class PinnedChatsStack extends StatefulWidget {
   static const expandedHeight = 154.0;
 
   final List<PinnedChatMessage> pinnedChats;
+  final Map<String, ChatBadge> twitchBadges;
   final bool launchExternal;
   final void Function(String id) onDismiss;
   final void Function(Iterable<String> ids) onDismissMany;
@@ -18,6 +21,7 @@ class PinnedChatsStack extends StatefulWidget {
   const PinnedChatsStack({
     super.key,
     required this.pinnedChats,
+    this.twitchBadges = const {},
     required this.launchExternal,
     required this.onDismiss,
     required this.onDismissMany,
@@ -74,6 +78,7 @@ class _PinnedChatsStackState extends State<PinnedChatsStack> {
               child: _PinnedChatCard(
                 pin: topPin,
                 count: widget.pinnedChats.length,
+                twitchBadges: widget.twitchBadges,
                 launchExternal: widget.launchExternal,
                 canToggle: canToggleTopPin,
                 isExpanded: isTopPinExpanded,
@@ -163,13 +168,19 @@ class _PinnedChatsStackState extends State<PinnedChatsStack> {
                       },
                       title: _PinnedMessageText(
                         text: pin.messageText,
+                        fragments: pin.fragments,
                         launchExternal: widget.launchExternal,
                         breakLongLinks: _canTogglePinnedChat(pin.messageText),
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),
                       ),
-                      subtitle: Text(_pinSubtitle(pin)),
+                      subtitle: _PinnedSenderLine(
+                        pin: pin,
+                        twitchBadges: widget.twitchBadges,
+                        includePinnedBy: true,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
                       secondary: IconButton(
                         onPressed: () {
                           widget.onDismiss(pin.id);
@@ -206,17 +217,6 @@ class _PinnedChatsStackState extends State<PinnedChatsStack> {
         );
       },
     );
-  }
-
-  String _pinSubtitle(PinnedChatMessage pin) {
-    final parts = <String>[
-      pin.senderDisplayName,
-      if (pin.sentAt != null)
-        'sent at ${DateFormat.jm().format(pin.sentAt!.toLocal())}',
-      if (pin.pinnedByDisplayName != null)
-        'pinned by ${pin.pinnedByDisplayName}',
-    ];
-    return parts.join(' • ');
   }
 }
 
@@ -255,6 +255,7 @@ class _PinnedLayerCard extends StatelessWidget {
 class _PinnedChatCard extends StatelessWidget {
   final PinnedChatMessage pin;
   final int count;
+  final Map<String, ChatBadge> twitchBadges;
   final bool launchExternal;
   final bool canToggle;
   final bool isExpanded;
@@ -265,6 +266,7 @@ class _PinnedChatCard extends StatelessWidget {
   const _PinnedChatCard({
     required this.pin,
     required this.count,
+    required this.twitchBadges,
     required this.launchExternal,
     required this.canToggle,
     required this.isExpanded,
@@ -314,10 +316,9 @@ class _PinnedChatCard extends StatelessWidget {
                     Row(
                       children: [
                         Expanded(
-                          child: Text(
-                            'Pinned by ${pin.pinnedByDisplayName ?? 'moderator'}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                          child: _PinnedHeaderLine(
+                            pin: pin,
+                            twitchBadges: twitchBadges,
                             style: headerStyle,
                           ),
                         ),
@@ -327,6 +328,7 @@ class _PinnedChatCard extends StatelessWidget {
                     const SizedBox(height: 4),
                     _PinnedMessageText(
                       text: pin.messageText,
+                      fragments: pin.fragments,
                       launchExternal: launchExternal,
                       breakLongLinks: isExpanded,
                       maxLines: canToggle ? (isExpanded ? 5 : 1) : 2,
@@ -340,10 +342,9 @@ class _PinnedChatCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 5),
-                    Text(
-                      _senderLine(pin),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    _PinnedSenderLine(
+                      pin: pin,
+                      twitchBadges: twitchBadges,
                       style: theme.textTheme.labelSmall?.copyWith(
                         color: colorScheme.onSurfaceVariant.withValues(
                           alpha: 0.78,
@@ -388,15 +389,6 @@ class _PinnedChatCard extends StatelessWidget {
       ),
     );
   }
-
-  String _senderLine(PinnedChatMessage pin) {
-    final sentAt = pin.sentAt == null
-        ? null
-        : DateFormat.jm().format(pin.sentAt!.toLocal());
-    return sentAt == null
-        ? pin.senderDisplayName
-        : '${pin.senderDisplayName} sent at $sentAt';
-  }
 }
 
 class _PinnedCountChip extends StatelessWidget {
@@ -428,8 +420,103 @@ class _PinnedCountChip extends StatelessWidget {
   }
 }
 
+class _PinnedHeaderLine extends StatelessWidget {
+  final PinnedChatMessage pin;
+  final Map<String, ChatBadge> twitchBadges;
+  final TextStyle? style;
+
+  const _PinnedHeaderLine({
+    required this.pin,
+    required this.twitchBadges,
+    this.style,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final pinnedByName = pin.pinnedByDisplayName ?? 'moderator';
+    final badges = _resolvedPinnedBadges(pin.pinnedByBadges, twitchBadges);
+    if (badges.isEmpty) {
+      return Text(
+        'Pinned by $pinnedByName',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: style,
+      );
+    }
+
+    return Row(
+      children: [
+        Text('Pinned by ', style: style),
+        ..._pinnedBadgeWidgets(badges, size: 14),
+        Flexible(
+          child: Text(
+            pinnedByName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: style,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PinnedSenderLine extends StatelessWidget {
+  final PinnedChatMessage pin;
+  final Map<String, ChatBadge> twitchBadges;
+  final bool includePinnedBy;
+  final TextStyle? style;
+
+  const _PinnedSenderLine({
+    required this.pin,
+    required this.twitchBadges,
+    this.includePinnedBy = false,
+    this.style,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final badges = _resolvedPinnedBadges(pin.senderBadges, twitchBadges);
+    final text = _senderLine(pin, includePinnedBy: includePinnedBy);
+    if (badges.isEmpty) {
+      return Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: style,
+      );
+    }
+
+    return Row(
+      children: [
+        ..._pinnedBadgeWidgets(badges, size: 16),
+        Flexible(
+          child: Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: style,
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _senderLine(PinnedChatMessage pin, {required bool includePinnedBy}) {
+    final sentAt = pin.sentAt == null
+        ? null
+        : DateFormat.jm().format(pin.sentAt!.toLocal());
+    final senderLine = sentAt == null
+        ? pin.senderDisplayName
+        : '${pin.senderDisplayName} sent at $sentAt';
+    if (!includePinnedBy || pin.pinnedByDisplayName == null) return senderLine;
+    return '$senderLine • pinned by ${pin.pinnedByDisplayName}';
+  }
+}
+
 class _PinnedMessageText extends StatelessWidget {
   final String text;
+  final List<PinnedChatFragment> fragments;
   final bool launchExternal;
   final bool breakLongLinks;
   final TextStyle? style;
@@ -438,6 +525,7 @@ class _PinnedMessageText extends StatelessWidget {
 
   const _PinnedMessageText({
     required this.text,
+    this.fragments = const [],
     required this.launchExternal,
     this.breakLongLinks = false,
     this.style,
@@ -456,20 +544,50 @@ class _PinnedMessageText extends StatelessWidget {
 
   List<InlineSpan> _buildSpans(BuildContext context) {
     final spans = <InlineSpan>[];
+    if (fragments.isNotEmpty) {
+      for (final fragment in fragments) {
+        final emote = fragment.emote;
+        if (emote != null) {
+          spans.add(_PinnedEmoteSpan(emote: emote));
+        } else {
+          _addLinkedTextSpans(context, spans, fragment.text);
+        }
+      }
+
+      if (spans.isNotEmpty) return spans;
+    }
+
+    _addLinkedTextSpans(context, spans, text);
+
+    if (spans.isEmpty) {
+      return [TextSpan(text: text, style: style)];
+    }
+
+    return spans;
+  }
+
+  void _addLinkedTextSpans(
+    BuildContext context,
+    List<InlineSpan> spans,
+    String source,
+  ) {
     final linkColor = Theme.of(context).colorScheme.primary;
     var cursor = 0;
 
-    for (final match in regexLink.allMatches(text)) {
-      final linkStart = _linkStartIncludingScheme(text, match.start);
+    for (final match in regexLink.allMatches(source)) {
+      final linkStart = _linkStartIncludingScheme(source, match.start);
       if (linkStart < cursor) continue;
 
       _addPlainSpan(
         spans,
-        text.substring(cursor, linkStart),
-        breakBeforeLink: breakLongLinks && linkStart > 0,
+        source.substring(cursor, linkStart),
+        breakBeforeLink: breakLongLinks && (linkStart > 0 || spans.isNotEmpty),
       );
+      if (breakLongLinks && linkStart == cursor && spans.isNotEmpty) {
+        _addLineBreakBeforeLink(spans);
+      }
 
-      final rawLink = text.substring(linkStart, match.end);
+      final rawLink = source.substring(linkStart, match.end);
       final trimmedLink = _trimTrailingLinkPunctuation(rawLink);
       spans.add(
         TextSpan(
@@ -493,15 +611,9 @@ class _PinnedMessageText extends StatelessWidget {
       cursor = match.end;
     }
 
-    if (cursor < text.length) {
-      spans.add(TextSpan(text: text.substring(cursor), style: style));
+    if (cursor < source.length) {
+      spans.add(TextSpan(text: source.substring(cursor), style: style));
     }
-
-    if (spans.isEmpty) {
-      return [TextSpan(text: text, style: style)];
-    }
-
-    return spans;
   }
 
   void _addPlainSpan(
@@ -522,6 +634,72 @@ class _PinnedMessageText extends StatelessWidget {
 
     spans.add(TextSpan(text: text, style: style));
   }
+
+  void _addLineBreakBeforeLink(List<InlineSpan> spans) {
+    final lastSpan = spans.isEmpty ? null : spans.last;
+    if (lastSpan is TextSpan) {
+      final lastText = lastSpan.text;
+      if (lastText != null) {
+        if (lastText.endsWith('\n')) return;
+        spans[spans.length - 1] = TextSpan(
+          text: lastText.trimRight(),
+          style: lastSpan.style,
+          recognizer: lastSpan.recognizer,
+          children: lastSpan.children,
+        );
+      }
+    }
+
+    spans.add(TextSpan(text: '\n', style: style));
+  }
+}
+
+class _PinnedEmoteSpan extends WidgetSpan {
+  _PinnedEmoteSpan({required PinnedChatEmote emote})
+    : super(
+        alignment: PlaceholderAlignment.middle,
+        child: Semantics(
+          label: emote.text,
+          child: FrostyCachedNetworkImage(
+            imageUrl: emote.imageUrl,
+            height: defaultEmoteSize,
+            useFade: false,
+            placeholder: (context, url) => const SizedBox(),
+          ),
+        ),
+      );
+}
+
+List<ChatBadge> _resolvedPinnedBadges(
+  List<PinnedChatBadge> badges,
+  Map<String, ChatBadge> twitchBadges,
+) {
+  return badges
+      .map((badge) => badge.resolve(twitchBadges))
+      .whereType<ChatBadge>()
+      .toList();
+}
+
+List<Widget> _pinnedBadgeWidgets(
+  List<ChatBadge> badges, {
+  required double size,
+}) {
+  return [
+    for (final badge in badges)
+      Padding(
+        padding: const EdgeInsets.only(right: 3),
+        child: Semantics(
+          label: badge.name,
+          child: FrostyCachedNetworkImage(
+            imageUrl: badge.url,
+            width: size,
+            height: size,
+            useFade: false,
+            placeholder: (context, url) => SizedBox(width: size, height: size),
+          ),
+        ),
+      ),
+  ];
 }
 
 bool _canTogglePinnedChat(String text) =>

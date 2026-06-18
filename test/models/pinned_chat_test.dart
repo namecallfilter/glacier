@@ -135,6 +135,75 @@ void main() {
       expect(pins.single.messageText, 'Hello @chat');
     });
 
+    test('parses Twitch badges and emote fragments', () {
+      final pins = PinnedChatMessage.listFromGqlResponse({
+        'data': {
+          'channel': {
+            'pinnedChatMessages': {
+              'edges': [
+                {
+                  'node': {
+                    'id': 'pin-rich',
+                    'pinnedBy': {
+                      'displayName': 'Opogix',
+                      'badges': [
+                        {
+                          'setID': 'moderator',
+                          'version': '1',
+                          'title': 'Moderator',
+                        },
+                      ],
+                    },
+                    'pinnedMessage': {
+                      'id': 'msg-rich',
+                      'sender': {'displayName': 'Opogix'},
+                      'badges': [
+                        {
+                          'setID': 'subscriber',
+                          'version': '12',
+                          'title': '12-Month Subscriber',
+                          'imageURL4x': 'https://static.example/sub-4x.png',
+                        },
+                      ],
+                      'fragments': [
+                        {'text': '50% off all subs! '},
+                        {
+                          'text': 'Kappa',
+                          'emote': {'emoteID': '25'},
+                        },
+                        {'text': ' https://www.twitch.tv/subs/marlon'},
+                      ],
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      });
+
+      final pin = pins.single;
+
+      expect(
+        pin.messageText,
+        '50% off all subs! Kappa https://www.twitch.tv/subs/marlon',
+      );
+      expect(pin.senderBadges.single.key, 'subscriber/12');
+      expect(pin.senderBadges.single.title, '12-Month Subscriber');
+      expect(
+        pin.senderBadges.single.imageUrl,
+        'https://static.example/sub-4x.png',
+      );
+      expect(pin.pinnedByBadges.single.key, 'moderator/1');
+      expect(pin.fragments, hasLength(3));
+      expect(pin.fragments[1].text, 'Kappa');
+      expect(pin.fragments[1].emote?.id, '25');
+      expect(
+        pin.fragments[1].emote?.imageUrl,
+        'https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/3.0',
+      );
+    });
+
     test('skips malformed nodes without an id or message id', () {
       final pins = PinnedChatMessage.listFromGqlResponse({
         'data': {

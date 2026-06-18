@@ -2,9 +2,11 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:frosty/models/badges.dart';
 import 'package:frosty/models/pinned_chat.dart';
 import 'package:frosty/screens/channel/chat/widgets/pinned_chats_stack.dart';
 import 'package:frosty/theme.dart';
+import 'package:frosty/widgets/frosty_cached_network_image.dart';
 
 void main() {
   const urlLauncherChannel = MethodChannel('plugins.flutter.io/url_launcher');
@@ -140,6 +142,92 @@ void main() {
     expect(cardShape.side.color, isNot(theme.scaffoldBackgroundColor));
   });
 
+  testWidgets('renders pinned chat Twitch emotes and badges', (tester) async {
+    await tester.pumpWidget(
+      _TestApp(
+        child: PinnedChatsStack(
+          pinnedChats: [
+            _pin(
+              id: 'pin-1',
+              messageText: '50% off all subs! Kappa',
+              pinnedByBadges: [
+                const PinnedChatBadge(
+                  setId: 'moderator',
+                  version: '1',
+                  title: 'Moderator',
+                ),
+              ],
+              senderBadges: [
+                const PinnedChatBadge(
+                  setId: 'subscriber',
+                  version: '12',
+                  title: '12-Month Subscriber',
+                  imageUrl: 'https://static.example/sub-4x.png',
+                ),
+              ],
+              fragments: [
+                const PinnedChatFragment(text: '50% off all subs! '),
+                const PinnedChatFragment(
+                  text: 'Kappa',
+                  emote: PinnedChatEmote(id: '25', text: 'Kappa'),
+                ),
+              ],
+            ),
+          ],
+          twitchBadges: const {
+            'moderator/1': ChatBadge(
+              name: 'Moderator',
+              url: 'https://static.example/mod-4x.png',
+              type: BadgeType.twitch,
+            ),
+          },
+          launchExternal: false,
+          onDismiss: (_) {},
+          onDismissMany: (_) {},
+        ),
+      ),
+    );
+
+    expect(_findImage('https://static.example/mod-4x.png'), findsOneWidget);
+    expect(_findImage('https://static.example/sub-4x.png'), findsOneWidget);
+    expect(
+      _findImage(
+        'https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/3.0',
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('breaks leading link fragments when expanded', (tester) async {
+    const message =
+        'PartyPopper 50% off on all subs! https://www.twitch.tv/subs/marlon';
+
+    await tester.pumpWidget(
+      _TestApp(
+        child: PinnedChatsStack(
+          pinnedChats: [
+            _pin(
+              id: 'pin-1',
+              messageText: message,
+              fragments: const [
+                PinnedChatFragment(text: 'PartyPopper 50% off on all subs! '),
+                PinnedChatFragment(text: 'https://www.twitch.tv/subs/marlon'),
+              ],
+            ),
+          ],
+          launchExternal: false,
+          onDismiss: (_) {},
+          onDismissMany: (_) {},
+        ),
+      ),
+    );
+
+    expect(
+      _findRichTextContaining('PartyPopper').text.toPlainText(),
+      contains('subs!\nhttps://'),
+    );
+  });
+
   testWidgets('styles https scheme as part of pinned chat links', (
     tester,
   ) async {
@@ -254,15 +342,30 @@ class _TestApp extends StatelessWidget {
   }
 }
 
-PinnedChatMessage _pin({required String id, required String messageText}) =>
-    PinnedChatMessage(
-      id: id,
-      messageId: 'message-$id',
-      messageText: messageText,
-      senderDisplayName: 'SenderName',
-      pinnedByDisplayName: 'ModName',
-      sentAt: DateTime.parse('2026-06-18T09:40:00Z'),
-    );
+PinnedChatMessage _pin({
+  required String id,
+  required String messageText,
+  List<PinnedChatFragment> fragments = const [],
+  List<PinnedChatBadge> senderBadges = const [],
+  List<PinnedChatBadge> pinnedByBadges = const [],
+}) => PinnedChatMessage(
+  id: id,
+  messageId: 'message-$id',
+  messageText: messageText,
+  senderDisplayName: 'SenderName',
+  pinnedByDisplayName: 'ModName',
+  sentAt: DateTime.parse('2026-06-18T09:40:00Z'),
+  fragments: fragments,
+  senderBadges: senderBadges,
+  pinnedByBadges: pinnedByBadges,
+);
+
+Finder _findImage(String imageUrl) {
+  return find.byWidgetPredicate(
+    (widget) =>
+        widget is FrostyCachedNetworkImage && widget.imageUrl == imageUrl,
+  );
+}
 
 TextSpan _findTextSpan(String text) {
   for (final richText in find.byType(RichText).evaluate()) {

@@ -239,6 +239,7 @@ class Chat extends StatelessWidget {
               top: topOffset + PinnedChatsStack.topOffset,
               child: PinnedChatsStack(
                 pinnedChats: chatStore.pinnedChats.toList(),
+                twitchBadges: chatStore.assetsStore.twitchBadgesToObject,
                 launchExternal: chatStore.settings.launchUrlExternal,
                 onDismiss: chatStore.dismissPinnedChat,
                 onDismissMany: chatStore.dismissPinnedChats,

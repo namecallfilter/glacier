@@ -19,7 +19,6 @@ class PinnedChatsStack extends StatefulWidget {
   final Map<String, Emote> emoteToObject;
   final bool launchExternal;
   final void Function(String id) onDismiss;
-  final void Function(Iterable<String> ids) onDismissMany;
 
   const PinnedChatsStack({
     super.key,
@@ -28,7 +27,6 @@ class PinnedChatsStack extends StatefulWidget {
     this.emoteToObject = const {},
     required this.launchExternal,
     required this.onDismiss,
-    required this.onDismissMany,
   });
 
   @override
@@ -49,7 +47,6 @@ class _PinnedChatsStackState extends State<PinnedChatsStack> {
   Widget build(BuildContext context) {
     if (widget.pinnedChats.isEmpty) return const SizedBox.shrink();
 
-    final visibleLayerCount = widget.pinnedChats.length.clamp(1, 3);
     final topPin = widget.pinnedChats.first;
     final canToggleTopPin = _canTogglePinnedChat(topPin.messageText);
     final startsMinimized = _shouldStartMinimized(topPin.messageText);
@@ -68,27 +65,18 @@ class _PinnedChatsStackState extends State<PinnedChatsStack> {
         child: Stack(
           clipBehavior: Clip.none,
           children: [
-            for (var i = visibleLayerCount - 1; i >= 1; i--)
-              Positioned(
-                left: 10.0 * i,
-                right: 10.0 * i,
-                top: 7.0 * i,
-                child: _PinnedLayerCard(opacity: 1 - (i * 0.2)),
-              ),
             Positioned(
               left: 8,
               right: 8,
               top: 0,
               child: _PinnedChatCard(
                 pin: topPin,
-                count: widget.pinnedChats.length,
                 twitchBadges: widget.twitchBadges,
                 emoteToObject: widget.emoteToObject,
                 launchExternal: widget.launchExternal,
                 canToggle: canToggleTopPin,
                 isExpanded: isTopPinExpanded,
                 onToggle: () => _togglePinnedChat(topPin),
-                onOpen: () => _showPinnedChatsSheet(context),
                 onDismiss: () => widget.onDismiss(topPin.id),
               ),
             ),
@@ -107,180 +95,26 @@ class _PinnedChatsStackState extends State<PinnedChatsStack> {
       }
     });
   }
-
-  void _showPinnedChatsSheet(BuildContext context) {
-    final selectedPinIds = <String>{};
-
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            void dismissSelected() {
-              if (selectedPinIds.isEmpty) return;
-              widget.onDismissMany(selectedPinIds.toList());
-              Navigator.pop(context);
-            }
-
-            void dismissAll() {
-              widget.onDismissMany(widget.pinnedChats.map((pin) => pin.id));
-              Navigator.pop(context);
-            }
-
-            return SafeArea(
-              child: ListView(
-                shrinkWrap: true,
-                padding: const EdgeInsets.only(bottom: 16),
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 8, 8),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.push_pin_rounded,
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                        const SizedBox(width: 8),
-                        const Expanded(
-                          child: Text(
-                            'Pinned chats',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                        IconButton(
-                          onPressed: () => Navigator.pop(context),
-                          icon: const Icon(Icons.close_rounded),
-                          tooltip: 'Close',
-                        ),
-                      ],
-                    ),
-                  ),
-                  for (final pin in widget.pinnedChats)
-                    CheckboxListTile(
-                      value: selectedPinIds.contains(pin.id),
-                      onChanged: (selected) {
-                        setModalState(() {
-                          if (selected ?? false) {
-                            selectedPinIds.add(pin.id);
-                          } else {
-                            selectedPinIds.remove(pin.id);
-                          }
-                        });
-                      },
-                      title: _PinnedMessageText(
-                        text: pin.messageText,
-                        fragments: pin.fragments,
-                        emoteToObject: widget.emoteToObject,
-                        launchExternal: widget.launchExternal,
-                        breakLongLinks: _canTogglePinnedChat(pin.messageText),
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      subtitle: _PinnedSenderLine(
-                        pin: pin,
-                        twitchBadges: widget.twitchBadges,
-                        launchExternal: widget.launchExternal,
-                        includePinnedBy: true,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      secondary: IconButton(
-                        onPressed: () {
-                          widget.onDismiss(pin.id);
-                          Navigator.pop(context);
-                        },
-                        icon: const Icon(Icons.close_rounded),
-                        tooltip: 'Dismiss pinned chat',
-                      ),
-                      controlAffinity: ListTileControlAffinity.leading,
-                    ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        TextButton(
-                          onPressed: selectedPinIds.isEmpty
-                              ? null
-                              : dismissSelected,
-                          child: const Text('Dismiss selected'),
-                        ),
-                        const SizedBox(width: 8),
-                        FilledButton.tonal(
-                          onPressed: dismissAll,
-                          child: const Text('Dismiss all'),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-}
-
-class _PinnedLayerCard extends StatelessWidget {
-  final double opacity;
-
-  const _PinnedLayerCard({required this.opacity});
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-
-    return Opacity(
-      opacity: opacity,
-      child: Container(
-        height: 70,
-        decoration: BoxDecoration(
-          color: _pinnedSurfaceColor(context),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: colorScheme.outlineVariant.withValues(alpha: 0.68),
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.22),
-              blurRadius: 14,
-              offset: const Offset(0, 5),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 class _PinnedChatCard extends StatelessWidget {
   final PinnedChatMessage pin;
-  final int count;
   final Map<String, ChatBadge> twitchBadges;
   final Map<String, Emote> emoteToObject;
   final bool launchExternal;
   final bool canToggle;
   final bool isExpanded;
   final VoidCallback onToggle;
-  final VoidCallback onOpen;
   final VoidCallback onDismiss;
 
   const _PinnedChatCard({
     required this.pin,
-    required this.count,
     required this.twitchBadges,
     required this.emoteToObject,
     required this.launchExternal,
     required this.canToggle,
     required this.isExpanded,
     required this.onToggle,
-    required this.onOpen,
     required this.onDismiss,
   });
 
@@ -304,130 +138,89 @@ class _PinnedChatCard extends StatelessWidget {
         ),
       ),
       clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onOpen,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 9, 6, 9),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(
-                Icons.push_pin_rounded,
-                size: 18,
-                color: colorScheme.onSurfaceVariant.withValues(alpha: 0.92),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _PinnedHeaderLine(
-                            pin: pin,
-                            twitchBadges: twitchBadges,
-                            launchExternal: launchExternal,
-                            style: headerStyle,
-                          ),
-                        ),
-                        if (count > 1) _PinnedCountChip(count: count),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    _PinnedMessageText(
-                      text: pin.messageText,
-                      fragments: pin.fragments,
-                      emoteToObject: emoteToObject,
-                      launchExternal: launchExternal,
-                      breakLongLinks: isExpanded,
-                      maxLines: canToggle ? (isExpanded ? 5 : 1) : 2,
-                      overflow: canToggle && !isExpanded
-                          ? TextOverflow.ellipsis
-                          : TextOverflow.clip,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: colorScheme.onSurface,
-                        fontWeight: FontWeight.w700,
-                        height: 1.24,
-                      ),
-                    ),
-                    if (!canToggle || isExpanded) ...[
-                      const SizedBox(height: 5),
-                      _PinnedSenderLine(
-                        pin: pin,
-                        twitchBadges: twitchBadges,
-                        launchExternal: launchExternal,
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: colorScheme.onSurfaceVariant.withValues(
-                            alpha: 0.78,
-                          ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 9, 6, 9),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              Icons.push_pin_rounded,
+              size: 18,
+              color: colorScheme.onSurfaceVariant.withValues(alpha: 0.92),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _PinnedHeaderLine(
+                          pin: pin,
+                          twitchBadges: twitchBadges,
+                          launchExternal: launchExternal,
+                          style: headerStyle,
                         ),
                       ),
                     ],
-                  ],
-                ),
-              ),
-              if (canToggle)
-                IconButton(
-                  onPressed: onToggle,
-                  icon: Icon(
-                    isExpanded
-                        ? Icons.keyboard_arrow_up_rounded
-                        : Icons.keyboard_arrow_down_rounded,
                   ),
-                  tooltip: isExpanded
-                      ? 'Collapse pinned chat'
-                      : 'Expand pinned chat',
-                  visualDensity: VisualDensity.compact,
-                  iconSize: 20,
-                )
-              else if (count > 1)
-                IconButton(
-                  onPressed: onOpen,
-                  icon: const Icon(Icons.keyboard_arrow_down_rounded),
-                  tooltip: 'Open pinned chats',
-                  visualDensity: VisualDensity.compact,
-                  iconSize: 20,
-                ),
-              IconButton(
-                onPressed: onDismiss,
-                icon: const Icon(Icons.close_rounded),
-                tooltip: 'Dismiss pinned chat',
-                visualDensity: VisualDensity.compact,
-                iconSize: 18,
+                  const SizedBox(height: 4),
+                  _PinnedMessageText(
+                    text: pin.messageText,
+                    fragments: pin.fragments,
+                    emoteToObject: emoteToObject,
+                    launchExternal: launchExternal,
+                    breakLongLinks: isExpanded,
+                    maxLines: canToggle ? (isExpanded ? 5 : 1) : 2,
+                    overflow: canToggle && !isExpanded
+                        ? TextOverflow.ellipsis
+                        : TextOverflow.clip,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.onSurface,
+                      fontWeight: FontWeight.w700,
+                      height: 1.24,
+                    ),
+                  ),
+                  if (!canToggle || isExpanded) ...[
+                    const SizedBox(height: 5),
+                    _PinnedSenderLine(
+                      pin: pin,
+                      twitchBadges: twitchBadges,
+                      launchExternal: launchExternal,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant.withValues(
+                          alpha: 0.78,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _PinnedCountChip extends StatelessWidget {
-  final int count;
-
-  const _PinnedCountChip({required this.count});
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-      decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.68),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: colorScheme.outlineVariant.withValues(alpha: 0.45),
-        ),
-      ),
-      child: Text(
-        '$count pinned',
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-          color: colorScheme.onSurfaceVariant,
-          fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+            if (canToggle)
+              IconButton(
+                onPressed: onToggle,
+                icon: Icon(
+                  isExpanded
+                      ? Icons.keyboard_arrow_up_rounded
+                      : Icons.keyboard_arrow_down_rounded,
+                ),
+                tooltip: isExpanded
+                    ? 'Collapse pinned chat'
+                    : 'Expand pinned chat',
+                visualDensity: VisualDensity.compact,
+                iconSize: 20,
+              ),
+            IconButton(
+              onPressed: onDismiss,
+              icon: const Icon(Icons.close_rounded),
+              tooltip: 'Dismiss pinned chat',
+              visualDensity: VisualDensity.compact,
+              iconSize: 18,
+            ),
+          ],
         ),
       ),
     );
@@ -490,21 +283,19 @@ class _PinnedSenderLine extends StatelessWidget {
   final PinnedChatMessage pin;
   final Map<String, ChatBadge> twitchBadges;
   final bool launchExternal;
-  final bool includePinnedBy;
   final TextStyle? style;
 
   const _PinnedSenderLine({
     required this.pin,
     required this.twitchBadges,
     required this.launchExternal,
-    this.includePinnedBy = false,
     this.style,
   });
 
   @override
   Widget build(BuildContext context) {
     final badges = _resolvedPinnedBadges(pin.senderBadges, twitchBadges);
-    final text = _senderLine(pin, includePinnedBy: includePinnedBy);
+    final text = _senderLine(pin);
     if (badges.isEmpty) {
       return Text(
         text,
@@ -534,15 +325,13 @@ class _PinnedSenderLine extends StatelessWidget {
     );
   }
 
-  String _senderLine(PinnedChatMessage pin, {required bool includePinnedBy}) {
+  String _senderLine(PinnedChatMessage pin) {
     final sentAt = pin.sentAt == null
         ? null
         : DateFormat.jm().format(pin.sentAt!.toLocal());
-    final senderLine = sentAt == null
+    return sentAt == null
         ? pin.senderDisplayName
         : '${pin.senderDisplayName} sent at $sentAt';
-    if (!includePinnedBy || pin.pinnedByDisplayName == null) return senderLine;
-    return '$senderLine • pinned by ${pin.pinnedByDisplayName}';
   }
 }
 

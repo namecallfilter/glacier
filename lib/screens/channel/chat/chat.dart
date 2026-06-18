@@ -243,7 +243,6 @@ class Chat extends StatelessWidget {
                 emoteToObject: chatStore.assetsStore.emoteToObject,
                 launchExternal: chatStore.settings.launchUrlExternal,
                 onDismiss: chatStore.dismissPinnedChat,
-                onDismissMany: chatStore.dismissPinnedChats,
               ),
             );
           },

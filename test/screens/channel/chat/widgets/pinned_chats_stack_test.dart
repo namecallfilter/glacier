@@ -34,39 +34,39 @@ void main() {
     expect(PinnedChatsStack.topOffset, 5);
   });
 
-  testWidgets('shows collapsed pinned chat stack with count', (tester) async {
-    await tester.pumpWidget(
-      _TestApp(
-        child: PinnedChatsStack(
-          pinnedChats: [
-            _pin(id: 'pin-1', messageText: 'First pinned message'),
-            _pin(id: 'pin-2', messageText: 'Second pinned message'),
-          ],
-          launchExternal: false,
-          onDismiss: (_) {},
-          onDismissMany: (_) {},
+  testWidgets(
+    'shows only the current pinned chat without multi-pin affordance',
+    (tester) async {
+      await tester.pumpWidget(
+        _TestApp(
+          child: PinnedChatsStack(
+            pinnedChats: [
+              _pin(id: 'pin-1', messageText: 'First pinned message'),
+              _pin(id: 'pin-2', messageText: 'Second pinned message'),
+            ],
+            launchExternal: false,
+            onDismiss: (_) {},
+          ),
         ),
-      ),
-    );
+      );
 
-    expect(find.text('Pinned by ModName'), findsOneWidget);
-    expect(find.text('First pinned message'), findsOneWidget);
-    expect(find.text('2 pinned'), findsOneWidget);
-  });
+      expect(find.text('Pinned by ModName'), findsOneWidget);
+      expect(find.text('First pinned message'), findsOneWidget);
+      expect(find.text('Second pinned message'), findsNothing);
+      expect(find.text('2 pinned'), findsNothing);
+      expect(find.byTooltip('Open pinned chats'), findsNothing);
+    },
+  );
 
-  testWidgets('opens sheet and dismisses selected pins', (tester) async {
-    final dismissedIds = <String>[];
-
+  testWidgets('tapping pinned chat card does not open a pinned chat list', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       _TestApp(
         child: PinnedChatsStack(
-          pinnedChats: [
-            _pin(id: 'pin-1', messageText: 'First pinned message'),
-            _pin(id: 'pin-2', messageText: 'Second pinned message'),
-          ],
+          pinnedChats: [_pin(id: 'pin-1', messageText: 'First pinned message')],
           launchExternal: false,
           onDismiss: (_) {},
-          onDismissMany: dismissedIds.addAll,
         ),
       ),
     );
@@ -74,17 +74,9 @@ void main() {
     await tester.tap(find.text('First pinned message'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Pinned chats'), findsOneWidget);
-    expect(find.text('Dismiss selected'), findsOneWidget);
-    expect(find.text('Dismiss all'), findsOneWidget);
-
-    await tester.tap(find.byType(CheckboxListTile).first);
-    await tester.tap(find.byType(CheckboxListTile).last);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Dismiss selected'));
-    await tester.pumpAndSettle();
-
-    expect(dismissedIds, ['pin-1', 'pin-2']);
+    expect(find.text('Pinned chats'), findsNothing);
+    expect(find.text('Dismiss selected'), findsNothing);
+    expect(find.text('Dismiss all'), findsNothing);
   });
 
   testWidgets('styles and launches links in pinned chat text', (tester) async {
@@ -96,7 +88,6 @@ void main() {
           ],
           launchExternal: false,
           onDismiss: (_) {},
-          onDismissMany: (_) {},
         ),
       ),
     );
@@ -124,7 +115,6 @@ void main() {
           pinnedChats: [_pin(id: 'pin-1', messageText: 'Pinned message')],
           launchExternal: false,
           onDismiss: (_) {},
-          onDismissMany: (_) {},
         ),
       ),
     );
@@ -188,7 +178,6 @@ void main() {
           },
           launchExternal: false,
           onDismiss: (_) {},
-          onDismissMany: (_) {},
         ),
       ),
     );
@@ -263,7 +252,6 @@ void main() {
           ],
           launchExternal: false,
           onDismiss: (_) {},
-          onDismissMany: (_) {},
         ),
       ),
     );
@@ -306,7 +294,6 @@ void main() {
           ],
           launchExternal: false,
           onDismiss: (_) {},
-          onDismissMany: (_) {},
         ),
       ),
     );
@@ -354,7 +341,6 @@ void main() {
           },
           launchExternal: false,
           onDismiss: (_) {},
-          onDismissMany: (_) {},
         ),
       ),
     );
@@ -401,7 +387,6 @@ void main() {
           },
           launchExternal: false,
           onDismiss: (_) {},
-          onDismissMany: (_) {},
         ),
       ),
     );
@@ -441,7 +426,6 @@ void main() {
           ],
           launchExternal: false,
           onDismiss: (_) {},
-          onDismissMany: (_) {},
         ),
       ),
     );
@@ -467,7 +451,6 @@ void main() {
           ],
           launchExternal: false,
           onDismiss: (_) {},
-          onDismissMany: (_) {},
         ),
       ),
     );
@@ -497,7 +480,6 @@ void main() {
           pinnedChats: [_pin(id: 'pin-1', messageText: longMessage)],
           launchExternal: false,
           onDismiss: (_) {},
-          onDismissMany: (_) {},
         ),
       ),
     );
@@ -534,7 +516,6 @@ void main() {
           pinnedChats: [_pin(id: 'pin-1', messageText: longMessage)],
           launchExternal: false,
           onDismiss: (_) {},
-          onDismissMany: (_) {},
         ),
       ),
     );

@@ -259,8 +259,7 @@ class CastRelayServer(
                         "cast_relay action=playlist_edge " +
                             "path=$path media_sequence=${playlistMetadata.mediaSequence.orEmpty()} " +
                             "program_date_time=${sanitizeLogValue(playlistMetadata.programDateTime)} " +
-                            "target_duration=${playlistMetadata.targetDuration.orEmpty()} " +
-                            "last_segment_uri=${sanitizeLogValue(playlistMetadata.lastSegmentUri)}",
+                            "target_duration=${playlistMetadata.targetDuration.orEmpty()}",
                     )
                     rewritten.body.toByteArray(StandardCharsets.UTF_8)
                 }
@@ -289,8 +288,7 @@ class CastRelayServer(
                         "playlist=true selected_quality=${selectedQuality.orEmpty()} " +
                         "media_sequence=${playlistMetadata.mediaSequence.orEmpty()} " +
                         "program_date_time=${sanitizeLogValue(playlistMetadata.programDateTime)} " +
-                        "target_duration=${playlistMetadata.targetDuration.orEmpty()} " +
-                        "last_segment_uri=${sanitizeLogValue(playlistMetadata.lastSegmentUri)}",
+                        "target_duration=${playlistMetadata.targetDuration.orEmpty()}",
                 )
                 return@use
             }
@@ -559,7 +557,6 @@ class CastRelayServer(
         var mediaSequence: String? = null
         var programDateTime: String? = null
         var targetDuration: String? = null
-        var lastSegmentUri: String? = null
 
         playlist.lineSequence()
             .map(String::trim)
@@ -575,9 +572,6 @@ class CastRelayServer(
                     line.startsWith("#EXT-X-TARGETDURATION:", ignoreCase = true) -> {
                         targetDuration = line.substringAfter(":").trim()
                     }
-                    !line.startsWith("#") -> {
-                        lastSegmentUri = line
-                    }
                 }
             }
 
@@ -585,7 +579,6 @@ class CastRelayServer(
             mediaSequence = mediaSequence,
             programDateTime = programDateTime,
             targetDuration = targetDuration,
-            lastSegmentUri = lastSegmentUri,
         )
     }
 
@@ -633,7 +626,7 @@ class CastRelayServer(
     private fun sourceDescription(sourceUrl: String): String {
         return runCatching {
             val uri = URI(sourceUrl)
-            "${uri.host.orEmpty()}${uri.path.orEmpty()}"
+            uri.host.orEmpty()
         }.getOrDefault("unknown")
     }
 
@@ -685,7 +678,6 @@ class CastRelayServer(
         val mediaSequence: String? = null,
         val programDateTime: String? = null,
         val targetDuration: String? = null,
-        val lastSegmentUri: String? = null,
     )
 
     private companion object {

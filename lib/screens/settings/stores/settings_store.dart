@@ -9,8 +9,25 @@ class SettingsStore extends _SettingsStoreBase with _$SettingsStore {
   SettingsStore();
 
   factory SettingsStore.fromJson(Map<String, dynamic> json) =>
-      _$SettingsStoreFromJson(json);
+      _$SettingsStoreFromJson(_migrateLegacyNoticeSettings(json));
   Map<String, dynamic> toJson() => _$SettingsStoreToJson(this);
+}
+
+Map<String, dynamic> _migrateLegacyNoticeSettings(Map<String, dynamic> json) {
+  final migrated = Map<String, dynamic>.from(json);
+  final legacyShowUserNotices = json['showUserNotices'];
+
+  if (legacyShowUserNotices is bool) {
+    migrated.putIfAbsent('showPinnedChats', () => legacyShowUserNotices);
+    migrated.putIfAbsent('showChatNotices', () => legacyShowUserNotices);
+    migrated.putIfAbsent(
+      'showHighlightedMessages',
+      () => legacyShowUserNotices,
+    );
+  }
+
+  migrated.remove('showUserNotices');
+  return migrated;
 }
 
 abstract class _SettingsStoreBase with Store {
@@ -173,7 +190,9 @@ abstract class _SettingsStoreBase with Store {
 
   // Alert defaults
   static const defaultHighlightFirstTimeChatter = true;
-  static const defaultShowUserNotices = true;
+  static const defaultShowPinnedChats = true;
+  static const defaultShowChatNotices = true;
+  static const defaultShowHighlightedMessages = true;
 
   // Layout defaults
   static const defaultEmoteMenuButtonOnLeft = false;
@@ -275,9 +294,17 @@ abstract class _SettingsStoreBase with Store {
   @observable
   var highlightFirstTimeChatter = defaultHighlightFirstTimeChatter;
 
-  @JsonKey(defaultValue: defaultShowUserNotices)
+  @JsonKey(defaultValue: defaultShowPinnedChats)
   @observable
-  var showUserNotices = defaultShowUserNotices;
+  var showPinnedChats = defaultShowPinnedChats;
+
+  @JsonKey(defaultValue: defaultShowChatNotices)
+  @observable
+  var showChatNotices = defaultShowChatNotices;
+
+  @JsonKey(defaultValue: defaultShowHighlightedMessages)
+  @observable
+  var showHighlightedMessages = defaultShowHighlightedMessages;
 
   // Layout options
   @JsonKey(defaultValue: defaultEmoteMenuButtonOnLeft)
@@ -380,7 +407,9 @@ abstract class _SettingsStoreBase with Store {
     syncedChatDelay = defaultChatDelay;
 
     highlightFirstTimeChatter = defaultHighlightFirstTimeChatter;
-    showUserNotices = defaultShowUserNotices;
+    showPinnedChats = defaultShowPinnedChats;
+    showChatNotices = defaultShowChatNotices;
+    showHighlightedMessages = defaultShowHighlightedMessages;
 
     emoteMenuButtonOnLeft = defaultEmoteMenuButtonOnLeft;
 

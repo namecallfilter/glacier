@@ -7,6 +7,7 @@ import 'package:frosty/screens/channel/chat/stores/chat_store.dart';
 import 'package:frosty/screens/channel/chat/stores/chat_tabs_store.dart';
 import 'package:frosty/screens/channel/chat/widgets/chat_bottom_bar.dart';
 import 'package:frosty/screens/channel/chat/widgets/chat_message.dart';
+import 'package:frosty/screens/channel/chat/widgets/pinned_chats_stack.dart';
 import 'package:frosty/utils.dart';
 import 'package:frosty/utils/context_extensions.dart';
 import 'package:frosty/widgets/frosty_page_view.dart';
@@ -85,11 +86,20 @@ class Chat extends StatelessWidget {
                             final scrollController = _isMerged
                                 ? chatTabsStore!.mergedScrollController
                                 : chatStore.scrollController;
+                            final showPinnedChats =
+                                chatStore.settings.showPinnedChats &&
+                                chatStore.pinnedChats.isNotEmpty;
+                            final pinnedChatsHeight = showPinnedChats
+                                ? PinnedChatsStack.topOffset +
+                                      PinnedChatsStack.collapsedHeight
+                                : 0.0;
 
                             return FrostyScrollbar(
                               controller: scrollController,
                               padding: EdgeInsets.only(
-                                top: MediaQuery.of(context).padding.top,
+                                top:
+                                    MediaQuery.of(context).padding.top +
+                                    pinnedChatsHeight,
                                 bottom:
                                     chatStore.bottomBarHeight + bottomPadding,
                               ),
@@ -99,10 +109,12 @@ class Chat extends StatelessWidget {
                                       ? _buildMergedList(
                                           scrollController,
                                           bottomPadding,
+                                          pinnedChatsHeight,
                                         )
                                       : _buildNormalList(
                                           scrollController,
                                           bottomPadding,
+                                          pinnedChatsHeight,
                                         );
                                 },
                               ),
@@ -127,6 +139,7 @@ class Chat extends StatelessWidget {
                           : null,
                     ),
                   ),
+                  _buildPinnedChatsStack(),
                   _buildResumeScrollButton(),
                 ],
               ),
@@ -141,11 +154,15 @@ class Chat extends StatelessWidget {
   Widget _buildNormalList(
     ScrollController scrollController,
     double bottomPadding,
+    double pinnedChatsHeight,
   ) {
     return ListView.builder(
       reverse: true,
       padding: (listPadding ?? EdgeInsets.zero).add(
-        EdgeInsets.only(bottom: chatStore.bottomBarHeight + bottomPadding),
+        EdgeInsets.only(
+          top: pinnedChatsHeight,
+          bottom: chatStore.bottomBarHeight + bottomPadding,
+        ),
       ),
       addAutomaticKeepAlives: false,
       scrollCacheExtent: _chatCacheExtent,
@@ -162,6 +179,7 @@ class Chat extends StatelessWidget {
   Widget _buildMergedList(
     ScrollController scrollController,
     double bottomPadding,
+    double pinnedChatsHeight,
   ) {
     final mergedMessages = chatTabsStore!.mergedMessages;
     final channelIdToUserTwitch = chatTabsStore!.mergedChannelIdToUserTwitch;
@@ -170,7 +188,10 @@ class Chat extends StatelessWidget {
     return ListView.builder(
       reverse: true,
       padding: (listPadding ?? EdgeInsets.zero).add(
-        EdgeInsets.only(bottom: chatStore.bottomBarHeight + bottomPadding),
+        EdgeInsets.only(
+          top: pinnedChatsHeight,
+          bottom: chatStore.bottomBarHeight + bottomPadding,
+        ),
       ),
       addAutomaticKeepAlives: false,
       scrollCacheExtent: _chatCacheExtent,
@@ -193,6 +214,38 @@ class Chat extends StatelessWidget {
           },
           overrideChannelIdToUserTwitch: channelIdToUserTwitch,
           overrideCurrentChannelId: currentChannelId,
+        );
+      },
+    );
+  }
+
+  Widget _buildPinnedChatsStack() {
+    return Builder(
+      builder: (context) {
+        final topOffset = (listPadding ?? EdgeInsets.zero)
+            .resolve(Directionality.of(context))
+            .top;
+
+        return Observer(
+          builder: (_) {
+            if (!chatStore.settings.showPinnedChats ||
+                chatStore.pinnedChats.isEmpty) {
+              return const SizedBox.shrink();
+            }
+
+            return Positioned(
+              left: 0,
+              right: 0,
+              top: topOffset + PinnedChatsStack.topOffset,
+              child: PinnedChatsStack(
+                pinnedChats: chatStore.pinnedChats.toList(),
+                twitchBadges: chatStore.assetsStore.twitchBadgesToObject,
+                emoteToObject: chatStore.assetsStore.emoteToObject,
+                launchExternal: chatStore.settings.launchUrlExternal,
+                onDismiss: chatStore.dismissPinnedChat,
+              ),
+            );
+          },
         );
       },
     );

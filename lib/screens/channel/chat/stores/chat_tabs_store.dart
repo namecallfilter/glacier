@@ -5,6 +5,7 @@ import 'package:frosty/apis/bttv_api.dart';
 import 'package:frosty/apis/ffz_api.dart';
 import 'package:frosty/apis/seventv_api.dart';
 import 'package:frosty/apis/twitch_api.dart';
+import 'package:frosty/apis/twitch_gql_api.dart';
 import 'package:frosty/models/irc.dart';
 import 'package:frosty/models/user.dart';
 import 'package:frosty/screens/channel/chat/details/chat_details_store.dart';
@@ -94,6 +95,7 @@ abstract class ChatTabsStoreBase with Store {
 
   /// API services needed for creating ChatStore instances.
   final TwitchApi twitchApi;
+  final TwitchGqlApi twitchGqlApi;
   final BTTVApi bttvApi;
   final FFZApi ffzApi;
   final SevenTVApi sevenTVApi;
@@ -287,6 +289,7 @@ abstract class ChatTabsStoreBase with Store {
 
   ChatTabsStoreBase({
     required this.twitchApi,
+    required this.twitchGqlApi,
     required this.bttvApi,
     required this.ffzApi,
     required this.sevenTVApi,
@@ -343,6 +346,7 @@ abstract class ChatTabsStoreBase with Store {
   }) {
     return ChatStore(
       twitchApi: twitchApi,
+      twitchGqlApi: twitchGqlApi,
       channelName: channelLogin,
       channelId: channelId,
       displayName: displayName,

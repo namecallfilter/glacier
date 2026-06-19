@@ -233,13 +233,15 @@ class GlacierCastController(
 
         remoteMediaClient.load(request).setResultCallback { result ->
             val status = result.status
-            Log.d(
-                LOG_TAG,
-                "cast action=load_result success=${status.isSuccess} " +
-                    "status=${status.statusCode} " +
-                    "message=${status.statusMessage ?: ""} " +
-                    "relay=$relayUrl",
-            )
+            if (!status.isSuccess) {
+                Log.d(
+                    LOG_TAG,
+                    "cast action=load_result success=false " +
+                        "status=${status.statusCode} " +
+                        "message=${status.statusMessage ?: ""} " +
+                        "relay=$relayUrl",
+                )
+            }
         }
         pendingLoad = false
         emitState(currentSession())
@@ -420,12 +422,14 @@ class GlacierCastController(
             stopKeepAlive()
             emitDisconnected()
             emitRoutes()
-            Log.d(
-                LOG_TAG,
-                "cast action=session_ended error=$error " +
-                    "status=${castStatusName(error)} " +
-                    "receiver=$receiverApplicationIdDescription",
-            )
+            if (error != 0) {
+                Log.d(
+                    LOG_TAG,
+                    "cast action=session_ended error=$error " +
+                        "status=${castStatusName(error)} " +
+                        "receiver=$receiverApplicationIdDescription",
+                )
+            }
         }
 
         override fun onSessionResuming(session: CastSession, sessionId: String) = Unit

@@ -74,7 +74,7 @@ class StreamProxyWebViewClient(
         )
 
         if (decision.action != StreamProxyAction.PROXY) {
-            if (currentConfig.enabled) {
+            if (currentConfig.enabled && shouldLogDecision(decision)) {
                 logDecision(decision)
             }
             return null
@@ -114,6 +114,23 @@ class StreamProxyWebViewClient(
                 "action=${decision.action.logName} " +
                 "reason=${decision.reason ?: "none"}",
         )
+    }
+
+    private fun shouldLogDecision(decision: StreamProxyDecision): Boolean {
+        if (decision.requestType == StreamProxyRequestType.UNKNOWN &&
+            decision.reason == "unknown"
+        ) {
+            return false
+        }
+
+        if (decision.requestType == StreamProxyRequestType.GRAPHQL &&
+            decision.reason == "post_body_unavailable"
+        ) {
+            return false
+        }
+
+        return decision.reason != "optimized_unflagged" &&
+            decision.reason != "optimized_already_proxied"
     }
 
     private fun log(message: String) {

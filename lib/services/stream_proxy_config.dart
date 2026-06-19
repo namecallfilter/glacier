@@ -1,5 +1,8 @@
-import 'package:flutter/foundation.dart';
 import 'package:frosty/screens/settings/stores/settings_store.dart';
+
+const defaultStreamProxyDebugLogging = bool.fromEnvironment(
+  'STREAM_PROXY_DEBUG_LOGGING',
+);
 
 class StreamProxyConfig {
   final StreamProxyMode mode;
@@ -13,13 +16,13 @@ class StreamProxyConfig {
     required this.currentChannelLogin,
     required this.proxyUrls,
     required this.whitelistedChannels,
-    this.debugLogging = kDebugMode,
+    this.debugLogging = defaultStreamProxyDebugLogging,
   });
 
   factory StreamProxyConfig.fromSettings({
     required SettingsStore settingsStore,
     required String currentChannelLogin,
-    bool debugLogging = kDebugMode,
+    bool debugLogging = defaultStreamProxyDebugLogging,
   }) {
     return StreamProxyConfig(
       mode: settingsStore.streamProxyMode,
@@ -93,10 +96,7 @@ String? _extractExplicitPort(String normalizedUrl) {
   }
 
   final authorityStart = schemeSeparatorIndex + 3;
-  final authorityEnd = normalizedUrl.indexOf(
-    RegExp(r'[/#?]'),
-    authorityStart,
-  );
+  final authorityEnd = normalizedUrl.indexOf(RegExp(r'[/#?]'), authorityStart);
   final authority = normalizedUrl.substring(
     authorityStart,
     authorityEnd == -1 ? normalizedUrl.length : authorityEnd,

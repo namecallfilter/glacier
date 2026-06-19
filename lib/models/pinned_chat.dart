@@ -14,11 +14,13 @@ class PinnedChatMessage {
   final String messageText;
   final String? senderId;
   final String? senderLogin;
+  final String? senderColor;
   final String senderDisplayName;
   final List<PinnedChatBadge> senderBadges;
   final List<PinnedChatFragment> fragments;
   final String? pinnedById;
   final String? pinnedByLogin;
+  final String? pinnedByColor;
   final String? pinnedByDisplayName;
   final List<PinnedChatBadge> pinnedByBadges;
   final DateTime? startsAt;
@@ -35,8 +37,10 @@ class PinnedChatMessage {
     this.fragments = const [],
     this.senderId,
     this.senderLogin,
+    this.senderColor,
     this.pinnedById,
     this.pinnedByLogin,
+    this.pinnedByColor,
     this.pinnedByDisplayName,
     this.pinnedByBadges = const [],
     this.startsAt,
@@ -119,12 +123,14 @@ class PinnedChatMessage {
       senderId: _asString(sender?['id']),
       senderLogin:
           _asString(sender?['login']) ?? _asString(sender?['userLogin']),
+      senderColor: _extractChatColor(sender),
       senderDisplayName: senderDisplayName,
       senderBadges: senderBadges,
       fragments: fragments,
       pinnedById: _asString(pinnedBy?['id']),
       pinnedByLogin:
           _asString(pinnedBy?['login']) ?? _asString(pinnedBy?['userLogin']),
+      pinnedByColor: _extractChatColor(pinnedBy),
       pinnedByDisplayName:
           _asString(pinnedBy?['displayName']) ??
           _asString(pinnedBy?['display_name']),
@@ -488,6 +494,23 @@ class PinnedChatMessage {
     final text = _asString(value);
     if (text == null) return null;
     return DateTime.tryParse(text)?.toUtc();
+  }
+
+  static String? _extractChatColor(Map<String, dynamic>? user) {
+    if (user == null) return null;
+
+    for (final key in const [
+      'chatColor',
+      'chat_color',
+      'color',
+      'nameColor',
+      'name_color',
+    ]) {
+      final color = _asString(user[key]);
+      if (color != null) return color;
+    }
+
+    return null;
   }
 
   static String _normalizeImageUrl(String url) =>

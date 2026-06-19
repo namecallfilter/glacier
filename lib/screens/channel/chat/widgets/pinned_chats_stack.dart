@@ -5,6 +5,7 @@ import 'package:frosty/models/badges.dart';
 import 'package:frosty/models/emotes.dart';
 import 'package:frosty/models/irc.dart';
 import 'package:frosty/models/pinned_chat.dart';
+import 'package:frosty/utils.dart' as utils;
 import 'package:frosty/widgets/frosty_cached_network_image.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -273,6 +274,7 @@ class _PinnedHeaderLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pinnedByName = pin.pinnedByDisplayName ?? 'moderator';
+    final nameStyle = _chatNameStyle(context, style, pin.pinnedByColor);
     final badges = _resolvedPinnedBadges(
       pin.pinnedByBadges,
       twitchBadges,
@@ -280,6 +282,19 @@ class _PinnedHeaderLine extends StatelessWidget {
     );
 
     if (badges.isEmpty) {
+      if (nameStyle != style) {
+        return Text.rich(
+          TextSpan(
+            children: [
+              TextSpan(text: 'Pinned by ', style: style),
+              TextSpan(text: pinnedByName, style: nameStyle),
+            ],
+          ),
+          overflow: TextOverflow.visible,
+          softWrap: true,
+        );
+      }
+
       return Text(
         'Pinned by $pinnedByName',
         overflow: TextOverflow.visible,
@@ -297,7 +312,7 @@ class _PinnedHeaderLine extends StatelessWidget {
           name: pinnedByName,
           badgeSize: 14,
           launchExternal: launchExternal,
-          style: style,
+          style: nameStyle,
         ),
       ],
     );
@@ -375,11 +390,26 @@ class _PinnedSenderLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final badges = _resolvedPinnedBadges(pin.senderBadges, twitchBadges);
+    final nameStyle = _chatNameStyle(context, style, pin.senderColor);
     final sentAt = pin.sentAt == null
         ? null
         : DateFormat.jm().format(pin.sentAt!.toLocal());
 
     if (badges.isEmpty) {
+      if (nameStyle != style) {
+        return Text.rich(
+          TextSpan(
+            children: [
+              TextSpan(text: pin.senderDisplayName, style: nameStyle),
+              if (sentAt != null)
+                TextSpan(text: ' sent at $sentAt', style: style),
+            ],
+          ),
+          overflow: TextOverflow.visible,
+          softWrap: true,
+        );
+      }
+
       return Text(
         sentAt == null
             ? pin.senderDisplayName
@@ -398,7 +428,7 @@ class _PinnedSenderLine extends StatelessWidget {
           name: pin.senderDisplayName,
           badgeSize: 16,
           launchExternal: launchExternal,
-          style: style,
+          style: nameStyle,
         ),
         if (sentAt != null) Text(' sent at $sentAt', style: style),
       ],
@@ -705,6 +735,30 @@ Color _pinnedSurfaceColor(BuildContext context) {
   return theme.scaffoldBackgroundColor.a == 0
       ? colorScheme.surface
       : theme.scaffoldBackgroundColor;
+}
+
+TextStyle? _chatNameStyle(
+  BuildContext context,
+  TextStyle? style,
+  String? colorText,
+) {
+  final color = _parseChatNameColor(context, colorText);
+  if (color == null) return style;
+
+  return (style ?? const TextStyle()).copyWith(
+    color: color,
+    fontWeight: FontWeight.w700,
+  );
+}
+
+Color? _parseChatNameColor(BuildContext context, String? colorText) {
+  if (colorText == null || colorText.isEmpty) return null;
+
+  final normalized = colorText.startsWith('#') ? colorText : '#$colorText';
+  if (!RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(normalized)) return null;
+
+  final rawColor = Color(int.parse(normalized.replaceFirst('#', '0xFF')));
+  return utils.adjustChatNameColor(context, rawColor);
 }
 
 String _trimTrailingLinkPunctuation(String link) {

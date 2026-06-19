@@ -8,6 +8,7 @@ import 'package:frosty/models/emotes.dart';
 import 'package:frosty/models/pinned_chat.dart';
 import 'package:frosty/screens/channel/chat/widgets/pinned_chats_stack.dart';
 import 'package:frosty/theme.dart';
+import 'package:frosty/utils.dart' as utils;
 import 'package:frosty/widgets/frosty_cached_network_image.dart';
 
 void main() {
@@ -302,6 +303,56 @@ void main() {
     expect(
       _findImage('https://static.example/sender-bits.png'),
       findsOneWidget,
+    );
+  });
+
+  testWidgets('colors pinned metadata names with chat name colors', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _TestApp(
+        child: PinnedChatsStack(
+          pinnedChats: [
+            _pin(
+              id: 'pin-1',
+              messageText: 'Pinned message',
+              pinnedByDisplayName: 'PinMod',
+              senderDisplayName: 'SenderUser',
+              pinnedByColor: '#FF0000',
+              senderColor: '#00FF00',
+              pinnedByBadges: const [
+                PinnedChatBadge(
+                  setId: 'moderator',
+                  version: '1',
+                  title: 'Moderator',
+                  imageUrl: 'https://static.example/pinner-mod.png',
+                ),
+              ],
+              senderBadges: const [
+                PinnedChatBadge(
+                  setId: 'subscriber',
+                  version: '12',
+                  title: '12-Month Subscriber',
+                  imageUrl: 'https://static.example/sender-sub.png',
+                ),
+              ],
+            ),
+          ],
+          launchExternal: false,
+          onDismiss: (_) {},
+        ),
+      ),
+    );
+
+    final context = tester.element(find.byType(PinnedChatsStack));
+
+    expect(
+      _findExactTextStyle('PinMod')?.color,
+      utils.adjustChatNameColor(context, const Color(0xFFFF0000)),
+    );
+    expect(
+      _findExactTextStyle('SenderUser')?.color,
+      utils.adjustChatNameColor(context, const Color(0xFF00FF00)),
     );
   });
 
@@ -819,12 +870,16 @@ PinnedChatMessage _pin({
   List<PinnedChatBadge> pinnedByBadges = const [],
   String senderDisplayName = 'SenderName',
   String pinnedByDisplayName = 'ModName',
+  String? senderColor,
+  String? pinnedByColor,
 }) => PinnedChatMessage(
   id: id,
   messageId: 'message-$id',
   messageText: messageText,
   senderDisplayName: senderDisplayName,
+  senderColor: senderColor,
   pinnedByDisplayName: pinnedByDisplayName,
+  pinnedByColor: pinnedByColor,
   sentAt: DateTime.parse('2026-06-18T09:40:00Z'),
   fragments: fragments,
   senderBadges: senderBadges,
@@ -854,6 +909,29 @@ TextSpan? _findTextSpanIn(InlineSpan span, String text) {
 
     for (final child in span.children ?? const <InlineSpan>[]) {
       final found = _findTextSpanIn(child, text);
+      if (found != null) return found;
+    }
+  }
+
+  return null;
+}
+
+TextStyle? _findExactTextStyle(String text) {
+  for (final richText in find.byType(RichText).evaluate()) {
+    final widget = richText.widget as RichText;
+    final style = _findExactTextStyleIn(widget.text, text);
+    if (style != null) return style;
+  }
+
+  return null;
+}
+
+TextStyle? _findExactTextStyleIn(InlineSpan span, String text) {
+  if (span is TextSpan) {
+    if (span.text == text) return span.style;
+
+    for (final child in span.children ?? const <InlineSpan>[]) {
+      final found = _findExactTextStyleIn(child, text);
       if (found != null) return found;
     }
   }

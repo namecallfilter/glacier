@@ -31,6 +31,7 @@ void main() {
                       'id': 'mod-1',
                       'login': 'modname',
                       'displayName': 'ModName',
+                      'chatColor': '#FF0000',
                     },
                     'pinnedMessage': {
                       'id': 'msg-1',
@@ -40,6 +41,7 @@ void main() {
                         'id': 'sender-1',
                         'login': 'fossabot',
                         'displayName': 'Fossabot',
+                        'chatColor': '#00FF00',
                       },
                     },
                   },
@@ -57,9 +59,11 @@ void main() {
       expect(pins.first.senderId, 'sender-1');
       expect(pins.first.senderLogin, 'fossabot');
       expect(pins.first.senderDisplayName, 'Fossabot');
+      expect(pins.first.senderColor, '#00FF00');
       expect(pins.first.pinnedById, 'mod-1');
       expect(pins.first.pinnedByLogin, 'modname');
       expect(pins.first.pinnedByDisplayName, 'ModName');
+      expect(pins.first.pinnedByColor, '#FF0000');
       expect(pins.first.startsAt, DateTime.parse('2026-06-18T04:10:00Z'));
       expect(pins.first.updatedAt, DateTime.parse('2026-06-18T04:11:00Z'));
       expect(pins.first.endsAt, isNull);

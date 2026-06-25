@@ -6,18 +6,8 @@ library;
 
 const twitchEmotesGlobalResponse = {
   'data': [
-    {
-      'id': '25',
-      'name': 'Kappa',
-      'emote_type': 'bitstier',
-      'owner_id': null,
-    },
-    {
-      'id': '1902',
-      'name': 'Keepo',
-      'emote_type': 'globals',
-      'owner_id': null,
-    },
+    {'id': '25', 'name': 'Kappa', 'emote_type': 'bitstier', 'owner_id': null},
+    {'id': '1902', 'name': 'Keepo', 'emote_type': 'globals', 'owner_id': null},
   ],
 };
 
@@ -46,6 +36,8 @@ const twitchUserResponse = {
       'login': 'testuser',
       'display_name': 'TestUser',
       'profile_image_url': 'https://cdn/profile.png',
+      'description': 'Test channel description',
+      'offline_image_url': 'https://cdn/offline.png',
     },
   ],
 };
@@ -65,6 +57,34 @@ const twitchStreamResponse = {
     },
   ],
   'pagination': {'cursor': 'next_cursor'},
+};
+
+const twitchVideoResponse = {
+  'data': [
+    {
+      'id': '98765',
+      'stream_id': 'stream-123',
+      'user_id': '12345',
+      'user_login': 'testuser',
+      'user_name': 'TestUser',
+      'title': 'Past Broadcast',
+      'description': 'A recent stream',
+      'created_at': '2024-01-02T00:00:00Z',
+      'published_at': '2024-01-02T00:05:00Z',
+      'url': 'https://www.twitch.tv/videos/98765',
+      'thumbnail_url':
+          'https://static-cdn.jtvnw.net/cf_vods/example/%{width}x%{height}/thumb.jpg',
+      'viewable': 'public',
+      'view_count': 321,
+      'language': 'en',
+      'type': 'archive',
+      'duration': '1h2m3s',
+      'muted_segments': [
+        {'duration': 30, 'offset': 120},
+      ],
+    },
+  ],
+  'pagination': {'cursor': 'videos_cursor'},
 };
 
 const twitchCategoryResponse = {
@@ -203,11 +223,7 @@ const ffzEmotesGlobalResponse = {
 };
 
 const ffzRoomInfoResponse = {
-  'room': {
-    'set': 123,
-    'vip_badge': null,
-    'mod_urls': null,
-  },
+  'room': {'set': 123, 'vip_badge': null, 'mod_urls': null},
   'sets': {
     '123': {
       'emoticons': [
@@ -275,12 +291,7 @@ const sevenTVEmotesGlobalResponse = {
             {'name': '1x.webp', 'width': 32, 'height': 32, 'format': 'WEBP'},
             {'name': '2x.webp', 'width': 64, 'height': 64, 'format': 'WEBP'},
             {'name': '3x.webp', 'width': 96, 'height': 96, 'format': 'WEBP'},
-            {
-              'name': '4x.webp',
-              'width': 128,
-              'height': 128,
-              'format': 'WEBP',
-            },
+            {'name': '4x.webp', 'width': 128, 'height': 128, 'format': 'WEBP'},
           ],
         },
       },
@@ -303,12 +314,7 @@ const sevenTVEmotesChannelResponse = {
           'host': {
             'url': '//cdn.7tv.app/emote/7tv_ch1',
             'files': [
-              {
-                'name': '1x.webp',
-                'width': 32,
-                'height': 32,
-                'format': 'WEBP',
-              },
+              {'name': '1x.webp', 'width': 32, 'height': 32, 'format': 'WEBP'},
               {
                 'name': '4x.webp',
                 'width': 128,

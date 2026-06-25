@@ -26,6 +26,7 @@ class StreamInfoBar extends StatelessWidget {
   final bool isOffline;
   final bool showTextShadows;
   final String? displayName;
+  final VoidCallback? onProfileTap;
 
   const StreamInfoBar({
     super.key,
@@ -44,8 +45,8 @@ class StreamInfoBar extends StatelessWidget {
     this.isOffline = false,
     this.showTextShadows = true,
     this.displayName,
+    this.onProfileTap,
   });
-
 
   TextStyle _getBaseTextStyle(
     BuildContext context,
@@ -96,27 +97,30 @@ class StreamInfoBar extends StatelessWidget {
       child: Row(
         spacing: 8,
         children: [
-          Container(
-            decoration: isInSharedChatMode
-                ? BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: Theme.of(context).colorScheme.primary,
-                      width: 2,
-                    ),
-                  )
-                : null,
-            child: Padding(
-              padding: isInSharedChatMode
-                  ? const EdgeInsets.all(1.5)
-                  : EdgeInsets.zero,
-              child: ProfilePicture(
-                userLogin: isOffline
-                    ? (offlineChannelInfo?.broadcasterLogin.isNotEmpty == true
-                          ? offlineChannelInfo?.broadcasterLogin ?? ''
-                          : displayName ?? '')
-                    : (streamInfo?.userLogin ?? ''),
-                radius: 16,
+          GestureDetector(
+            onTap: onProfileTap,
+            child: Container(
+              decoration: isInSharedChatMode
+                  ? BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Theme.of(context).colorScheme.primary,
+                        width: 2,
+                      ),
+                    )
+                  : null,
+              child: Padding(
+                padding: isInSharedChatMode
+                    ? const EdgeInsets.all(1.5)
+                    : EdgeInsets.zero,
+                child: ProfilePicture(
+                  userLogin: isOffline
+                      ? (offlineChannelInfo?.broadcasterLogin.isNotEmpty == true
+                            ? offlineChannelInfo?.broadcasterLogin ?? ''
+                            : displayName ?? '')
+                      : (streamInfo?.userLogin ?? ''),
+                  radius: 16,
+                ),
               ),
             ),
           ),
@@ -202,7 +206,9 @@ class StreamInfoBar extends StatelessWidget {
                                         Navigator.push(
                                           context,
                                           MaterialPageRoute(
-                                            settings: const RouteSettings(name: CategoryStreams.routeName),
+                                            settings: const RouteSettings(
+                                              name: CategoryStreams.routeName,
+                                            ),
                                             builder: (context) =>
                                                 CategoryStreams(
                                                   categoryId:
@@ -294,7 +300,9 @@ class StreamInfoBar extends StatelessWidget {
                                       onDoubleTap: () => Navigator.push(
                                         context,
                                         MaterialPageRoute(
-                                          settings: const RouteSettings(name: CategoryStreams.routeName),
+                                          settings: const RouteSettings(
+                                            name: CategoryStreams.routeName,
+                                          ),
                                           builder: (context) => CategoryStreams(
                                             categoryId:
                                                 streamInfo?.gameId ?? '',

@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:frosty/apis/base_api_client.dart';
 import 'package:frosty/models/channel.dart';
-import 'package:frosty/screens/channel/channel.dart';
+import 'package:frosty/screens/channel/channel_route.dart';
 import 'package:frosty/screens/home/search/search_store.dart';
 import 'package:frosty/utils.dart';
 import 'package:frosty/utils/modal_bottom_sheet.dart';
@@ -36,16 +36,11 @@ class _SearchResultsChannelsState extends State<SearchResultsChannels> {
 
       if (!context.mounted) return;
 
-      Navigator.push(
+      pushChannelProfile(
         context,
-        MaterialPageRoute(
-          settings: const RouteSettings(name: VideoChat.routeName),
-          builder: (context) => VideoChat(
-            userId: channelInfo.broadcasterId,
-            userName: channelInfo.broadcasterName,
-            userLogin: channelInfo.broadcasterLogin,
-          ),
-        ),
+        userId: channelInfo.broadcasterId,
+        userName: channelInfo.broadcasterName,
+        userLogin: channelInfo.broadcasterLogin,
       );
     } on ApiException catch (e) {
       debugPrint('Search channels ApiException: $e');
@@ -118,17 +113,24 @@ class _SearchResultsChannelsState extends State<SearchResultsChannels> {
                   );
 
                   return InkWell(
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        settings: const RouteSettings(name: VideoChat.routeName),
-                        builder: (context) => VideoChat(
+                    onTap: () {
+                      if (channel.isLive) {
+                        pushVideoChat(
+                          context,
                           userId: channel.id,
                           userName: channel.displayName,
                           userLogin: channel.broadcasterLogin,
-                        ),
-                      ),
-                    ),
+                        );
+                        return;
+                      }
+
+                      pushChannelProfile(
+                        context,
+                        userId: channel.id,
+                        userName: channel.displayName,
+                        userLogin: channel.broadcasterLogin,
+                      );
+                    },
                     onLongPress: () {
                       HapticFeedback.mediumImpact();
 
@@ -144,9 +146,17 @@ class _SearchResultsChannelsState extends State<SearchResultsChannels> {
                     },
                     child: ListTile(
                       title: Text(displayName),
-                      leading: ProfilePicture(
-                        userLogin: channel.broadcasterLogin,
-                        radius: 16,
+                      leading: GestureDetector(
+                        onTap: () => pushChannelProfile(
+                          context,
+                          userId: channel.id,
+                          userName: channel.displayName,
+                          userLogin: channel.broadcasterLogin,
+                        ),
+                        child: ProfilePicture(
+                          userLogin: channel.broadcasterLogin,
+                          radius: 16,
+                        ),
                       ),
                       subtitle: channel.isLive
                           ? Row(

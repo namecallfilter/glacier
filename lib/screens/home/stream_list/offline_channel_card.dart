@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:frosty/models/followed_channel.dart';
-import 'package:frosty/screens/channel/channel.dart';
+import 'package:frosty/screens/channel/channel_route.dart';
 import 'package:frosty/screens/settings/stores/auth_store.dart';
 import 'package:frosty/utils.dart';
 import 'package:frosty/utils/modal_bottom_sheet.dart';
@@ -54,16 +54,11 @@ class OfflineChannelCard extends StatelessWidget {
     }
 
     return InkWell(
-      onTap: () => Navigator.push(
+      onTap: () => pushChannelProfile(
         context,
-        MaterialPageRoute(
-          settings: const RouteSettings(name: VideoChat.routeName),
-          builder: (context) => VideoChat(
-            userId: channelInfo.broadcasterId,
-            userName: channelInfo.broadcasterName,
-            userLogin: channelInfo.broadcasterLogin,
-          ),
-        ),
+        userId: channelInfo.broadcasterId,
+        userName: channelInfo.broadcasterName,
+        userLogin: channelInfo.broadcasterLogin,
       ),
       onLongPress: () {
         HapticFeedback.mediumImpact();

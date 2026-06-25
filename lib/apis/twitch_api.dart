@@ -9,6 +9,7 @@ import 'package:frosty/models/emotes.dart';
 import 'package:frosty/models/followed_channel.dart';
 import 'package:frosty/models/shared_chat_session.dart';
 import 'package:frosty/models/stream.dart';
+import 'package:frosty/models/twitch_video.dart';
 import 'package:frosty/models/user.dart';
 
 /// The Twitch service for making API calls.
@@ -241,6 +242,28 @@ class TwitchApi extends BaseApiClient {
     final data = await get<JsonMap>(url);
 
     return StreamsTwitch.fromJson(data);
+  }
+
+  Future<TwitchVideos> getVideos({
+    required String userId,
+    TwitchVideoType type = TwitchVideoType.archive,
+    String sort = 'time',
+    String period = 'all',
+    int first = 20,
+    String? cursor,
+  }) async {
+    final queryParams = {
+      'user_id': userId,
+      'type': type.name,
+      'sort': sort,
+      'period': period,
+      'first': first.toString(),
+    };
+    if (cursor != null) queryParams['after'] = cursor;
+
+    final data = await get<JsonMap>('/videos', queryParameters: queryParams);
+
+    return TwitchVideos.fromJson(data);
   }
 
   /// Returns a [UserTwitch] object containing the user info associated with the given [userLogin].

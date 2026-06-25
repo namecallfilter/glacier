@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:frosty/apis/base_api_client.dart';
 import 'package:frosty/apis/twitch_api.dart';
 import 'package:frosty/models/emotes.dart';
+import 'package:frosty/models/twitch_video.dart';
 import 'package:http_mock_adapter/http_mock_adapter.dart';
 
 import '../fixtures/api_responses.dart';
@@ -119,9 +120,7 @@ void main() {
     test('throws NotFoundException for unknown user', () {
       dioAdapter.onGet(
         'https://api.twitch.tv/helix/users',
-        (server) => server.reply(200, {
-          'data': <dynamic>[],
-        }),
+        (server) => server.reply(200, {'data': <dynamic>[]}),
         queryParameters: {'login': 'doesnotexist'},
       );
 
@@ -204,13 +203,61 @@ void main() {
         }),
       );
 
-      final result = await api.getStreamsByIds(
-        userIds: ['111', '222'],
-      );
+      final result = await api.getStreamsByIds(userIds: ['111', '222']);
 
       expect(result.data, hasLength(2));
       expect(result.data[0].userName, 'User1');
       expect(result.data[1].userName, 'User2');
+    });
+  });
+
+  group('getVideos', () {
+    test('returns archive videos for a broadcaster with pagination', () async {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/videos',
+        (server) => server.reply(200, twitchVideoResponse),
+        queryParameters: {
+          'user_id': '12345',
+          'type': 'archive',
+          'sort': 'time',
+          'period': 'all',
+          'first': '20',
+        },
+      );
+
+      final videos = await api.getVideos(userId: '12345');
+
+      expect(videos.data, hasLength(1));
+      expect(videos.data.single.id, '98765');
+      expect(videos.data.single.type, TwitchVideoType.archive);
+      expect(videos.pagination['cursor'], 'videos_cursor');
+    });
+
+    test('passes type and cursor when provided', () async {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/videos',
+        (server) => server.reply(200, {
+          'data': <dynamic>[],
+          'pagination': <String, String>{},
+        }),
+        queryParameters: {
+          'user_id': '12345',
+          'type': 'highlight',
+          'sort': 'time',
+          'period': 'all',
+          'first': '10',
+          'after': 'cursor-2',
+        },
+      );
+
+      final videos = await api.getVideos(
+        userId: '12345',
+        type: TwitchVideoType.highlight,
+        first: 10,
+        cursor: 'cursor-2',
+      );
+
+      expect(videos.data, isEmpty);
     });
   });
 
@@ -339,9 +386,7 @@ void main() {
     test('throws ApiException for nonexistent channel', () {
       dioAdapter.onGet(
         'https://api.twitch.tv/helix/channels',
-        (server) => server.reply(200, {
-          'data': <dynamic>[],
-        }),
+        (server) => server.reply(200, {'data': <dynamic>[]}),
         queryParameters: {'broadcaster_id': '99999'},
       );
 

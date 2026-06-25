@@ -15,7 +15,7 @@ import 'package:frosty/apis/twitch_gql_api.dart';
 import 'package:frosty/apis/unauthorized_interceptor.dart';
 import 'package:frosty/cache_manager.dart';
 import 'package:frosty/constants.dart';
-import 'package:frosty/screens/channel/channel.dart';
+import 'package:frosty/screens/channel/channel_route.dart';
 import 'package:frosty/screens/home/home.dart';
 import 'package:frosty/screens/onboarding/onboarding_intro.dart';
 import 'package:frosty/screens/settings/stores/auth_store.dart';
@@ -205,13 +205,10 @@ class _MyAppState extends State<MyApp> {
 
         final user = await twitchApi.getUser(userLogin: channelName);
 
-        final route = MaterialPageRoute(
-          settings: const RouteSettings(name: VideoChat.routeName),
-          builder: (context) => VideoChat(
-            userId: user.id,
-            userName: user.displayName,
-            userLogin: user.login,
-          ),
+        final route = channelProfileRoute(
+          userId: user.id,
+          userName: user.displayName,
+          userLogin: user.login,
         );
 
         if (navigatorKey.currentState == null) return;

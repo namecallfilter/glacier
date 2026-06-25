@@ -9,8 +9,17 @@ class UserTwitch {
   final String login;
   final String displayName;
   final String profileImageUrl;
+  final String description;
+  final String offlineImageUrl;
 
-  const UserTwitch(this.id, this.login, this.displayName, this.profileImageUrl);
+  const UserTwitch(
+    this.id,
+    this.login,
+    this.displayName,
+    this.profileImageUrl, {
+    this.description = '',
+    this.offlineImageUrl = '',
+  });
 
   factory UserTwitch.fromJson(Map<String, dynamic> json) =>
       _$UserTwitchFromJson(json);

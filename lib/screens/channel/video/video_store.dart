@@ -13,6 +13,7 @@ import 'package:frosty/screens/channel/video/stream_info_poller.dart';
 import 'package:frosty/screens/channel/video/video_timing_constants.dart';
 import 'package:frosty/screens/settings/stores/auth_store.dart';
 import 'package:frosty/screens/settings/stores/settings_store.dart';
+import 'package:frosty/services/cast_state.dart';
 import 'package:frosty/services/stream_proxy_bridge.dart';
 import 'package:frosty/services/stream_proxy_config.dart';
 import 'package:mobx/mobx.dart';
@@ -409,6 +410,9 @@ abstract class VideoStoreBase with Store {
     final castState = StreamProxyBridge.castState.value;
 
     if (castState.isCasting) {
+      if (shouldClearLocalLoadingForCast(castState)) {
+        _loading = false;
+      }
       unawaited(_pauseLocalPlaybackForCast());
       _syncChatDelayFromCurrentSource();
       return;
@@ -1425,4 +1429,8 @@ abstract class VideoStoreBase with Store {
       debugPrint(e.toString());
     }
   }
+}
+
+bool shouldClearLocalLoadingForCast(CastState castState) {
+  return castState.isCasting;
 }

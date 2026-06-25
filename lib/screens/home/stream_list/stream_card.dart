@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:frosty/constants.dart';
 import 'package:frosty/models/stream.dart';
-import 'package:frosty/screens/channel/channel.dart';
+import 'package:frosty/screens/channel/channel_route.dart';
 import 'package:frosty/screens/home/top/categories/category_streams.dart';
 import 'package:frosty/screens/settings/stores/auth_store.dart';
 import 'package:frosty/utils.dart';
@@ -59,9 +59,8 @@ class StreamCard extends StatelessWidget {
           '-${thumbnailWidth}x$thumbnailHeight',
         ),
         cacheKey: cacheKey,
-        placeholder: (context, url) => const SkeletonLoader(
-          borderRadius: kCardBorderRadius,
-        ),
+        placeholder: (context, url) =>
+            const SkeletonLoader(borderRadius: kCardBorderRadius),
         useOldImageOnUrlChange: true,
       ),
     );
@@ -132,7 +131,18 @@ class StreamCard extends StatelessWidget {
           Row(
             spacing: 4,
             children: [
-              ProfilePicture(userLogin: streamInfo.userLogin, radius: 10),
+              GestureDetector(
+                onTap: () => pushChannelProfile(
+                  context,
+                  userId: streamInfo.userId,
+                  userName: streamInfo.userName,
+                  userLogin: streamInfo.userLogin,
+                ),
+                child: ProfilePicture(
+                  userLogin: streamInfo.userLogin,
+                  radius: 10,
+                ),
+              ),
               Flexible(
                 child: Tooltip(
                   message: streamerName,
@@ -168,7 +178,9 @@ class StreamCard extends StatelessWidget {
                   ? () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                        settings: const RouteSettings(name: CategoryStreams.routeName),
+                        settings: const RouteSettings(
+                          name: CategoryStreams.routeName,
+                        ),
                         builder: (context) =>
                             CategoryStreams(categoryId: streamInfo.gameId),
                       ),
@@ -201,16 +213,11 @@ class StreamCard extends StatelessWidget {
     );
 
     return InkWell(
-      onTap: () => Navigator.push(
+      onTap: () => pushVideoChat(
         context,
-        MaterialPageRoute(
-          settings: const RouteSettings(name: VideoChat.routeName),
-          builder: (context) => VideoChat(
-            userId: streamInfo.userId,
-            userName: streamInfo.userName,
-            userLogin: streamInfo.userLogin,
-          ),
-        ),
+        userId: streamInfo.userId,
+        userName: streamInfo.userName,
+        userLogin: streamInfo.userLogin,
       ),
       onLongPress: () {
         HapticFeedback.mediumImpact();

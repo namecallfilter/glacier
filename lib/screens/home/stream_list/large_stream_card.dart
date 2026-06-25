@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:frosty/constants.dart';
 import 'package:frosty/models/stream.dart';
-import 'package:frosty/screens/channel/channel.dart';
+import 'package:frosty/screens/channel/channel_route.dart';
 import 'package:frosty/screens/channel/video/stream_info_bar.dart';
 import 'package:frosty/screens/settings/stores/auth_store.dart';
 import 'package:frosty/utils.dart';
@@ -57,9 +57,8 @@ class LargeStreamCard extends StatelessWidget {
               '-${thumbnailWidth}x$thumbnailHeight',
             ),
             cacheKey: cacheKey,
-            placeholder: (context, url) => const SkeletonLoader(
-              borderRadius: kCardBorderRadius,
-            ),
+            placeholder: (context, url) =>
+                const SkeletonLoader(borderRadius: kCardBorderRadius),
             useOldImageOnUrlChange: true,
           ),
         ),
@@ -72,16 +71,11 @@ class LargeStreamCard extends StatelessWidget {
     );
 
     return InkWell(
-      onTap: () => Navigator.push(
+      onTap: () => pushVideoChat(
         context,
-        MaterialPageRoute(
-          settings: const RouteSettings(name: VideoChat.routeName),
-          builder: (context) => VideoChat(
-            userId: streamInfo.userId,
-            userName: streamInfo.userName,
-            userLogin: streamInfo.userLogin,
-          ),
-        ),
+        userId: streamInfo.userId,
+        userName: streamInfo.userName,
+        userLogin: streamInfo.userLogin,
       ),
       onLongPress: () {
         HapticFeedback.mediumImpact();
@@ -113,6 +107,12 @@ class LargeStreamCard extends StatelessWidget {
               showCategory: showCategory,
               padding: const EdgeInsets.symmetric(vertical: 12),
               tooltipTriggerMode: TooltipTriggerMode.longPress,
+              onProfileTap: () => pushChannelProfile(
+                context,
+                userId: streamInfo.userId,
+                userName: streamInfo.userName,
+                userLogin: streamInfo.userLogin,
+              ),
             ),
           ],
         ),

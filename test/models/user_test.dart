@@ -14,6 +14,8 @@ void main() {
       expect(user.login, 'testuser');
       expect(user.displayName, 'TestUser');
       expect(user.profileImageUrl, 'https://cdn/profile.png');
+      expect(user.description, 'Test channel description');
+      expect(user.offlineImageUrl, 'https://cdn/offline.png');
     });
   });
 

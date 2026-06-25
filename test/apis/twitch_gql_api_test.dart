@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frosty/apis/twitch_gql_api.dart';
+import 'package:frosty/models/vod_comment.dart';
 import 'package:http_mock_adapter/http_mock_adapter.dart';
 
 void main() {
@@ -95,6 +96,101 @@ void main() {
       final pins = await api.getPinnedChats(channelId: '12345');
 
       expect(pins, isEmpty);
+    });
+  });
+
+  group('getVodCommentsByOffset', () {
+    test(
+      'sends VideoCommentsByOffsetOrCursor persisted query and parses page',
+      () async {
+        dioAdapter.onPost(
+          'https://gql.twitch.tv/gql',
+          (server) => server.reply(200, {
+            'data': {
+              'video': {
+                'comments': {
+                  'edges': [
+                    {
+                      'cursor': 'comment-cursor-1',
+                      'node': {
+                        'id': 'comment-1',
+                        'contentOffsetSeconds': 42,
+                        'createdAt': '2024-01-02T00:00:42Z',
+                        'commenter': {
+                          'id': 'user-1',
+                          'login': 'viewer',
+                          'displayName': 'Viewer',
+                          'profileImageURL': 'https://cdn/viewer.png',
+                        },
+                        'message': {
+                          'userColor': '#8A2BE2',
+                          'userBadges': [
+                            {
+                              'id': 'subscriber',
+                              'setID': 'subscriber',
+                              'version': '12',
+                            },
+                          ],
+                          'fragments': [
+                            {'text': 'hello '},
+                            {
+                              'text': 'Kappa',
+                              'emote': {'emoteID': '25'},
+                            },
+                          ],
+                        },
+                      },
+                    },
+                  ],
+                  'pageInfo': {'hasNextPage': true},
+                },
+              },
+            },
+          }),
+          data: Matchers.any,
+        );
+
+        final page = await api.getVodCommentsByOffset(
+          videoId: '98765',
+          contentOffsetSeconds: 42,
+        );
+
+        expect(page.comments, hasLength(1));
+        expect(page.comments.single.id, 'comment-1');
+        expect(page.comments.single.contentOffsetSeconds, 42);
+        expect(page.comments.single.message.body, 'hello Kappa');
+        expect(page.comments.single.message.fragments.last.emoteId, '25');
+        expect(page.hasNextPage, isTrue);
+        expect(capturedHeaders?['Client-ID'], isNotEmpty);
+        expect(capturedBody?['operationName'], 'VideoCommentsByOffsetOrCursor');
+        expect(capturedBody?['variables'], {
+          'videoID': '98765',
+          'contentOffsetSeconds': 42,
+        });
+        expect(
+          capturedBody?['extensions']?['persistedQuery']?['sha256Hash'],
+          'b70a3591ff0f4e0313d126c6a1502d79a1c02baebb288227c582044aa76adf6a',
+        );
+      },
+    );
+
+    test('returns empty page for GraphQL errors', () async {
+      dioAdapter.onPost(
+        'https://gql.twitch.tv/gql',
+        (server) => server.reply(200, {
+          'errors': [
+            {'message': 'PersistedQueryNotFound'},
+          ],
+        }),
+        data: Matchers.any,
+      );
+
+      final page = await api.getVodCommentsByOffset(
+        videoId: '98765',
+        contentOffsetSeconds: 0,
+      );
+
+      expect(page, VodCommentPage.empty);
     });
   });
 }

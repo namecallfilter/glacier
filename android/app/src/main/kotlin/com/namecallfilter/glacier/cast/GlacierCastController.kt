@@ -1,6 +1,10 @@
 package com.namecallfilter.glacier.cast
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import androidx.mediarouter.media.MediaRouteSelector
 import androidx.mediarouter.media.MediaRouter
@@ -14,6 +18,12 @@ import com.google.android.gms.cast.framework.SessionManagerListener
 import com.namecallfilter.glacier.streamproxy.CastRelayServer
 import com.namecallfilter.glacier.streamproxy.StreamProxyConfig
 import com.namecallfilter.glacier.streamproxy.StreamProxySessionRegistry
+import java.util.Locale
+
+internal const val PENDING_LOAD_RETRY_DELAY_MS = 500L
+internal const val MAX_PENDING_LOAD_RETRY_WINDOW_MS = 30_000L
+internal const val STARTUP_LOAD_DEBOUNCE_MS = 500L
+internal const val EXPECTED_CAST_RECEIVER_VERSION = "2026-06-24-1"
 
 class GlacierCastController(
     context: Context,
@@ -34,6 +44,19 @@ class GlacierCastController(
         .addControlCategory(CastMediaControlIntent.categoryForCast(receiverApplicationId))
         .build()
     private val routeCallback = CastRouteCallback()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val pendingLoadRetryRunnable = Runnable {
+        loadRetryScheduled = false
+        if (pendingLoad && currentSession()?.isConnected == true) {
+            loadCurrent()
+        }
+    }
+    private val startupLoadDebounceRunnable = Runnable {
+        startupLoadDebounceScheduled = false
+        if (pendingLoad && currentSession()?.isConnected == true) {
+            loadCurrent()
+        }
+    }
 
     @Volatile
     private var castContext: CastContext? = null
@@ -45,7 +68,25 @@ class GlacierCastController(
     private var pendingLoad = false
 
     @Volatile
+    private var pendingLoadStartedAtMs: Long? = null
+
+    @Volatile
+    private var loadRetryScheduled = false
+
+    @Volatile
+    private var startupLoadDebounceScheduled = false
+
+    @Volatile
+    private var awaitingReceiverMedia = false
+
+    @Volatile
     private var receiverLatencyMs: Long? = null
+
+    @Volatile
+    private var receiverRuntimeMismatchLogged = false
+
+    @Volatile
+    private var suspendedLocalWebViewIdentifier: Long? = null
 
     @Volatile
     private var routeDiscoveryActive = false
@@ -68,7 +109,7 @@ class GlacierCastController(
                 sessionListener,
                 CastSession::class.java,
             )
-            emitState(context.sessionManager.currentCastSession)
+            initializeExistingSession(context.sessionManager.currentCastSession)
         }.onFailure { error ->
             Log.d(LOG_TAG, "cast action=init_failed reason=${error.javaClass.simpleName}")
         }
@@ -79,22 +120,27 @@ class GlacierCastController(
         streamContext = context
         updateRelay(context)
 
-        if (
-            shouldLoadCurrentForContextUpdate(
+        when (
+            contextUpdateLoadAction(
                 sessionConnected = currentSession()?.isConnected == true,
                 pendingLoad = pendingLoad,
                 previous = previousContext,
                 next = context,
             )
         ) {
-            loadCurrent()
+            CastContextUpdateLoadAction.LOAD_NOW -> loadCurrent()
+            CastContextUpdateLoadAction.DEBOUNCE_STARTUP -> scheduleStartupLoadDebounce()
+            CastContextUpdateLoadAction.NONE -> Unit
         }
     }
 
     fun prepareLoad() {
         pendingLoad = true
+        pendingLoadStartedAtMs = SystemClock.elapsedRealtime()
+        awaitingReceiverMedia = false
+        cancelLoadTimers()
         if (currentSession()?.isConnected == true) {
-            loadCurrent()
+            scheduleStartupLoadDebounce()
         }
     }
 
@@ -161,6 +207,7 @@ class GlacierCastController(
             route.select()
         }.onFailure { error ->
             pendingLoad = false
+            resetLoadAttemptState()
             connectingRouteId = null
             connectingRouteName = null
             emitRoutes(error = "Unable to connect to Cast device.")
@@ -175,6 +222,8 @@ class GlacierCastController(
 
     fun stopCasting() {
         pendingLoad = false
+        resetLoadAttemptState()
+        restoreLocalWebViewAfterCast()
         receiverLatencyMs = null
         connectingRouteId = null
         connectingRouteName = null
@@ -186,10 +235,24 @@ class GlacierCastController(
     }
 
     private fun loadCurrent() {
-        val context = streamContext ?: return
+        cancelStartupLoadDebounce()
+        if (pendingLoadStartedAtMs == null) {
+            pendingLoadStartedAtMs = SystemClock.elapsedRealtime()
+        }
+
+        val context = streamContext
+        if (context == null) {
+            pendingLoad = true
+            logLoadFailure(CastLoadAttemptResult.MISSING_CONTEXT)
+            schedulePendingLoadRetry(CastLoadAttemptResult.MISSING_CONTEXT)
+            return
+        }
+
         val router = StreamProxySessionRegistry.routerFor(context.webViewIdentifier)
         if (router == null) {
-            log("cast action=load_failed reason=missing_router")
+            pendingLoad = true
+            logLoadFailure(CastLoadAttemptResult.MISSING_ROUTER)
+            schedulePendingLoadRetry(CastLoadAttemptResult.MISSING_ROUTER)
             return
         }
 
@@ -197,7 +260,12 @@ class GlacierCastController(
 
         val manifestUrl = router.latestUsherManifestUrl(context.channelLogin)
         if (manifestUrl == null) {
-            log("cast action=load_failed reason=missing_manifest channel=${context.channelLogin}")
+            pendingLoad = true
+            logLoadFailure(
+                result = CastLoadAttemptResult.MISSING_MANIFEST,
+                detail = "channel=${context.channelLogin}",
+            )
+            schedulePendingLoadRetry(CastLoadAttemptResult.MISSING_MANIFEST)
             return
         }
 
@@ -227,13 +295,22 @@ class GlacierCastController(
 
         val remoteMediaClient = currentSession()?.remoteMediaClient
         if (remoteMediaClient == null) {
-            log("cast action=load_failed reason=missing_remote_media_client")
+            pendingLoad = true
+            logLoadFailure(CastLoadAttemptResult.MISSING_REMOTE_MEDIA_CLIENT)
+            schedulePendingLoadRetry(CastLoadAttemptResult.MISSING_REMOTE_MEDIA_CLIENT)
             return
         }
 
+        setLocalWebViewCastSuspensionTarget(context.webViewIdentifier)
+        pendingLoad = false
+        awaitingReceiverMedia = true
         remoteMediaClient.load(request).setResultCallback { result ->
             val status = result.status
-            if (!status.isSuccess) {
+            if (status.isSuccess) {
+                confirmReceiverMediaLoaded()
+            } else {
+                awaitingReceiverMedia = false
+                pendingLoad = true
                 Log.d(
                     LOG_TAG,
                     "cast action=load_result success=false " +
@@ -241,11 +318,89 @@ class GlacierCastController(
                         "message=${status.statusMessage ?: ""} " +
                         "relay=$relayUrl",
                 )
+                schedulePendingLoadRetry(CastLoadAttemptResult.LOAD_RESULT_FAILED)
             }
         }
-        pendingLoad = false
         emitState(currentSession())
         log("cast action=load relay=$relayUrl quality=${context.quality}")
+    }
+
+    private fun logLoadFailure(result: CastLoadAttemptResult, detail: String? = null) {
+        val detailText = detail?.let { value -> " $value" } ?: ""
+        Log.d(
+            LOG_TAG,
+            "cast action=load_failed reason=${result.logReason()}$detailText " +
+                "age_ms=${pendingLoadAgeMs()}",
+        )
+    }
+
+    private fun schedulePendingLoadRetry(result: CastLoadAttemptResult) {
+        val decision = pendingLoadRetryDecision(
+            result = result,
+            pendingLoad = pendingLoad,
+            sessionConnected = currentSession()?.isConnected == true,
+            pendingLoadAgeMs = pendingLoadAgeMs(),
+        )
+        if (!decision.shouldRetry) {
+            if (
+                pendingLoad &&
+                currentSession()?.isConnected == true &&
+                pendingLoadAgeMs() > MAX_PENDING_LOAD_RETRY_WINDOW_MS
+            ) {
+                Log.d(
+                    LOG_TAG,
+                    "cast action=load_retry_expired " +
+                        "last_reason=${result.logReason()} " +
+                        "age_ms=${pendingLoadAgeMs()}",
+                )
+            }
+            return
+        }
+        if (loadRetryScheduled) return
+
+        loadRetryScheduled = true
+        mainHandler.postDelayed(pendingLoadRetryRunnable, decision.delayMs)
+    }
+
+    private fun scheduleStartupLoadDebounce() {
+        if (!pendingLoad || currentSession()?.isConnected != true) return
+
+        if (startupLoadDebounceScheduled) {
+            mainHandler.removeCallbacks(startupLoadDebounceRunnable)
+        }
+        startupLoadDebounceScheduled = true
+        mainHandler.postDelayed(startupLoadDebounceRunnable, STARTUP_LOAD_DEBOUNCE_MS)
+        log("cast action=startup_load_debounce delay_ms=$STARTUP_LOAD_DEBOUNCE_MS")
+    }
+
+    private fun cancelLoadTimers() {
+        mainHandler.removeCallbacks(pendingLoadRetryRunnable)
+        mainHandler.removeCallbacks(startupLoadDebounceRunnable)
+        loadRetryScheduled = false
+        startupLoadDebounceScheduled = false
+    }
+
+    private fun cancelStartupLoadDebounce() {
+        if (!startupLoadDebounceScheduled) return
+
+        mainHandler.removeCallbacks(startupLoadDebounceRunnable)
+        startupLoadDebounceScheduled = false
+    }
+
+    private fun resetLoadAttemptState() {
+        cancelLoadTimers()
+        pendingLoadStartedAtMs = null
+        awaitingReceiverMedia = false
+    }
+
+    private fun pendingLoadAgeMs(): Long {
+        val startedAtMs = pendingLoadStartedAtMs ?: return 0L
+        return (SystemClock.elapsedRealtime() - startedAtMs).coerceAtLeast(0L)
+    }
+
+    private fun confirmReceiverMediaLoaded() {
+        pendingLoad = false
+        resetLoadAttemptState()
     }
 
     private fun updateRelay(context: CastStreamContext) {
@@ -254,6 +409,34 @@ class GlacierCastController(
             router = router,
             config = context.config,
         )
+    }
+
+    private fun setLocalWebViewCastSuspensionTarget(targetWebViewIdentifier: Long?) {
+        val change = localWebViewCastSuspensionChange(
+            currentSuspendedWebViewIdentifier = suspendedLocalWebViewIdentifier,
+            targetWebViewIdentifier = targetWebViewIdentifier,
+        )
+
+        change.resumeWebViewIdentifier?.let { webViewIdentifier ->
+            StreamProxySessionRegistry.setLocalPlaybackSuspendedForCast(
+                webViewIdentifier = webViewIdentifier,
+                suspended = false,
+            )
+            log("cast action=local_webview_resume web_view=$webViewIdentifier")
+        }
+        change.suspendWebViewIdentifier?.let { webViewIdentifier ->
+            StreamProxySessionRegistry.setLocalPlaybackSuspendedForCast(
+                webViewIdentifier = webViewIdentifier,
+                suspended = true,
+            )
+            log("cast action=local_webview_suspend web_view=$webViewIdentifier")
+        }
+
+        suspendedLocalWebViewIdentifier = targetWebViewIdentifier
+    }
+
+    private fun restoreLocalWebViewAfterCast() {
+        setLocalWebViewCastSuspensionTarget(null)
     }
 
     private fun startKeepAlive() {
@@ -283,15 +466,47 @@ class GlacierCastController(
         return castContext?.sessionManager?.currentCastSession
     }
 
+    private fun initializeExistingSession(session: CastSession?) {
+        val actions = existingCastSessionStartupActions(
+            sessionConnected = session?.isConnected == true,
+            pendingLoad = pendingLoad,
+        )
+
+        if (actions.startKeepAlive) {
+            startKeepAlive()
+        }
+        if (actions.attachReceiverChannel && session != null) {
+            attachReceiverChannel(session)
+        }
+        emitState(session)
+        if (actions.emitRoutes) {
+            emitRoutes()
+        }
+        if (actions.loadCurrent) {
+            scheduleStartupLoadDebounce()
+        }
+    }
+
     private fun attachReceiverChannel(session: CastSession) {
         runCatching {
             session.setMessageReceivedCallbacks(CAST_NAMESPACE) { _, _, message ->
                 val status = CastReceiverMessageParser.parse(message)
-                    ?: return@setMessageReceivedCallbacks
+                if (status != null) {
+                    receiverLatencyMs = status.latencyMs ?: receiverLatencyMs
+                    if (awaitingReceiverMedia && receiverStatusConfirmsLoad(status)) {
+                        confirmReceiverMediaLoaded()
+                    }
+                    logReceiverStatus(status)
+                    emitState(session)
+                    return@setMessageReceivedCallbacks
+                }
 
-                receiverLatencyMs = status.latencyMs ?: receiverLatencyMs
-                logReceiverStatus(status)
-                emitState(session)
+                val diagnostic = CastReceiverMessageParser.parseDiagnostic(message)
+                    ?: return@setMessageReceivedCallbacks
+                if (awaitingReceiverMedia && receiverDiagnosticConfirmsLoad(diagnostic)) {
+                    confirmReceiverMediaLoaded()
+                }
+                logReceiverDiagnostic(diagnostic)
             }
         }.onFailure { error ->
             log("cast action=receiver_channel_failed reason=${error.javaClass.simpleName}")
@@ -299,17 +514,31 @@ class GlacierCastController(
     }
 
     private fun logReceiverStatus(status: CastReceiverStatus) {
-        log(
-            "cast action=receiver_status " +
-                "latency_ms=${status.latencyMs ?: -1} " +
-                "seekable_latency_ms=${status.seekableLatencyMs ?: -1} " +
-                "current_sec=${status.currentTimeSec ?: -1.0} " +
-                "range_start_sec=${status.rangeStartSec ?: -1.0} " +
-                "range_end_sec=${status.rangeEndSec ?: -1.0} " +
-                "target_sec=${status.targetLatencySec ?: -1.0} " +
-                "max_sec=${status.maxLatencySec ?: -1.0} " +
-                "latency_reference=${status.latencyReference ?: ""}",
-        )
+        if (shouldLogReceiverStatus()) {
+            Log.d(LOG_TAG, receiverStatusLogLine(status))
+        }
+        if (!receiverRuntimeMismatchLogged && shouldLogDiagnostics()) {
+            val mismatch = receiverRuntimeMismatchLogLine(status)
+            if (mismatch != null) {
+                receiverRuntimeMismatchLogged = true
+                Log.d(LOG_TAG, mismatch)
+            }
+        }
+    }
+
+    private fun logReceiverDiagnostic(diagnostic: CastReceiverDiagnostic) {
+        if (shouldLogDiagnostics()) {
+            Log.d(LOG_TAG, receiverDiagnosticLogLine(diagnostic))
+        }
+    }
+
+    private fun shouldLogReceiverStatus(): Boolean {
+        return shouldLogDiagnostics()
+    }
+
+    private fun shouldLogDiagnostics(): Boolean {
+        return streamContext?.config?.debugLogging == true ||
+            (applicationContext.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
     }
 
     private fun detachReceiverChannel(session: CastSession) {
@@ -370,7 +599,7 @@ class GlacierCastController(
     }
 
     private fun log(message: String) {
-        if (streamContext?.config?.debugLogging == true) {
+        if (shouldLogDiagnostics()) {
             Log.d(LOG_TAG, message)
         }
     }
@@ -382,6 +611,7 @@ class GlacierCastController(
 
         override fun onSessionStarted(session: CastSession, sessionId: String) {
             receiverLatencyMs = null
+            receiverRuntimeMismatchLogged = false
             connectingRouteId = null
             connectingRouteName = null
             startKeepAlive()
@@ -389,13 +619,16 @@ class GlacierCastController(
             emitState(session)
             emitRoutes()
             if (pendingLoad) {
-                loadCurrent()
+                scheduleStartupLoadDebounce()
             }
         }
 
         override fun onSessionStartFailed(session: CastSession, error: Int) {
             pendingLoad = false
+            resetLoadAttemptState()
+            restoreLocalWebViewAfterCast()
             receiverLatencyMs = null
+            receiverRuntimeMismatchLogged = false
             connectingRouteId = null
             connectingRouteName = null
             stopKeepAlive()
@@ -415,7 +648,10 @@ class GlacierCastController(
 
         override fun onSessionEnded(session: CastSession, error: Int) {
             pendingLoad = false
+            resetLoadAttemptState()
+            restoreLocalWebViewAfterCast()
             receiverLatencyMs = null
+            receiverRuntimeMismatchLogged = false
             connectingRouteId = null
             connectingRouteName = null
             relayServer.close()
@@ -435,6 +671,7 @@ class GlacierCastController(
         override fun onSessionResuming(session: CastSession, sessionId: String) = Unit
 
         override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) {
+            receiverRuntimeMismatchLogged = false
             connectingRouteId = null
             connectingRouteName = null
             startKeepAlive()
@@ -442,12 +679,16 @@ class GlacierCastController(
             emitState(session)
             emitRoutes()
             if (pendingLoad) {
-                loadCurrent()
+                scheduleStartupLoadDebounce()
             }
         }
 
         override fun onSessionResumeFailed(session: CastSession, error: Int) {
+            pendingLoad = false
+            resetLoadAttemptState()
+            restoreLocalWebViewAfterCast()
             receiverLatencyMs = null
+            receiverRuntimeMismatchLogged = false
             connectingRouteId = null
             connectingRouteName = null
             stopKeepAlive()
@@ -544,11 +785,199 @@ data class CastStreamContext(
     }
 }
 
+internal enum class CastContextUpdateLoadAction {
+    NONE,
+    LOAD_NOW,
+    DEBOUNCE_STARTUP,
+}
+
+internal fun contextUpdateLoadAction(
+    sessionConnected: Boolean,
+    pendingLoad: Boolean,
+    previous: CastStreamContext?,
+    next: CastStreamContext,
+): CastContextUpdateLoadAction {
+    if (!sessionConnected) return CastContextUpdateLoadAction.NONE
+    if (pendingLoad) return CastContextUpdateLoadAction.DEBOUNCE_STARTUP
+    if (next.requiresReceiverReloadFrom(previous)) return CastContextUpdateLoadAction.LOAD_NOW
+
+    return CastContextUpdateLoadAction.NONE
+}
+
 internal fun shouldLoadCurrentForContextUpdate(
     sessionConnected: Boolean,
     pendingLoad: Boolean,
     previous: CastStreamContext?,
     next: CastStreamContext,
 ): Boolean {
-    return sessionConnected && (pendingLoad || next.requiresReceiverReloadFrom(previous))
+    return contextUpdateLoadAction(
+        sessionConnected = sessionConnected,
+        pendingLoad = pendingLoad,
+        previous = previous,
+        next = next,
+    ) != CastContextUpdateLoadAction.NONE
+}
+
+internal enum class CastLoadAttemptResult {
+    STARTED,
+    MISSING_CONTEXT,
+    MISSING_ROUTER,
+    MISSING_MANIFEST,
+    MISSING_REMOTE_MEDIA_CLIENT,
+    LOAD_RESULT_FAILED,
+}
+
+internal data class PendingLoadRetryDecision(
+    val shouldRetry: Boolean,
+    val delayMs: Long,
+)
+
+internal fun pendingLoadRetryDecision(
+    result: CastLoadAttemptResult,
+    pendingLoad: Boolean,
+    sessionConnected: Boolean,
+    pendingLoadAgeMs: Long,
+): PendingLoadRetryDecision {
+    if (
+        result == CastLoadAttemptResult.STARTED ||
+        !pendingLoad ||
+        !sessionConnected ||
+        pendingLoadAgeMs > MAX_PENDING_LOAD_RETRY_WINDOW_MS
+    ) {
+        return PendingLoadRetryDecision(
+            shouldRetry = false,
+            delayMs = 0L,
+        )
+    }
+
+    return PendingLoadRetryDecision(
+        shouldRetry = true,
+        delayMs = PENDING_LOAD_RETRY_DELAY_MS,
+    )
+}
+
+internal fun receiverStatusConfirmsLoad(status: CastReceiverStatus): Boolean {
+    val playerState = status.playerState
+        ?.trim()
+        ?.uppercase(Locale.US)
+
+    return playerState == "BUFFERING" ||
+        playerState == "PLAYING" ||
+        receiverHasMediaTimeline(status)
+}
+
+internal fun receiverDiagnosticConfirmsLoad(diagnostic: CastReceiverDiagnostic): Boolean {
+    return diagnostic.action.equals("load", ignoreCase = true)
+}
+
+internal fun receiverHasMediaTimeline(status: CastReceiverStatus): Boolean {
+    return status.currentTimeSec != null &&
+        status.rangeEndSec != null
+}
+
+internal data class LocalWebViewCastSuspensionChange(
+    val suspendWebViewIdentifier: Long?,
+    val resumeWebViewIdentifier: Long?,
+)
+
+internal fun localWebViewCastSuspensionChange(
+    currentSuspendedWebViewIdentifier: Long?,
+    targetWebViewIdentifier: Long?,
+): LocalWebViewCastSuspensionChange {
+    if (currentSuspendedWebViewIdentifier == targetWebViewIdentifier) {
+        return LocalWebViewCastSuspensionChange(
+            suspendWebViewIdentifier = null,
+            resumeWebViewIdentifier = null,
+        )
+    }
+
+    return LocalWebViewCastSuspensionChange(
+        suspendWebViewIdentifier = targetWebViewIdentifier,
+        resumeWebViewIdentifier = currentSuspendedWebViewIdentifier,
+    )
+}
+
+private fun CastLoadAttemptResult.logReason(): String {
+    return when (this) {
+        CastLoadAttemptResult.STARTED -> "started"
+        CastLoadAttemptResult.MISSING_CONTEXT -> "missing_context"
+        CastLoadAttemptResult.MISSING_ROUTER -> "missing_router"
+        CastLoadAttemptResult.MISSING_MANIFEST -> "missing_manifest"
+        CastLoadAttemptResult.MISSING_REMOTE_MEDIA_CLIENT -> "missing_remote_media_client"
+        CastLoadAttemptResult.LOAD_RESULT_FAILED -> "load_result_failed"
+    }
+}
+
+internal fun receiverStatusLogLine(status: CastReceiverStatus): String {
+    return "cast action=receiver_status " +
+        "latency_ms=${status.latencyMs ?: -1} " +
+        "seekable_latency_ms=${status.seekableLatencyMs ?: -1} " +
+        "current_sec=${status.currentTimeSec ?: -1.0} " +
+        "range_start_sec=${status.rangeStartSec ?: -1.0} " +
+        "range_end_sec=${status.rangeEndSec ?: -1.0} " +
+        "live_edge_sec=${status.liveEdgeTimeSec ?: -1.0} " +
+        "target_sec=${status.targetLatencySec ?: -1.0} " +
+        "max_sec=${status.maxLatencySec ?: -1.0} " +
+        "latency_reference=${status.latencyReference ?: ""} " +
+        "buffering=${status.buffering ?: ""} " +
+        "buffering_age_ms=${status.bufferingAgeMs ?: -1} " +
+        "player_state=${sanitizeReceiverLogValue(status.playerState)} " +
+        "playback_rate=${status.playbackRate ?: -1.0} " +
+        "receiver_version=${sanitizeReceiverLogValue(status.receiverVersion)}"
+}
+
+internal fun receiverRuntimeMismatchLogLine(status: CastReceiverStatus): String? {
+    if (status.receiverVersion == EXPECTED_CAST_RECEIVER_VERSION) return null
+
+    val missingFields = receiverRuntimeMissingFields(status)
+    val actualVersion = status.receiverVersion ?: "missing"
+    return "cast action=receiver_runtime_mismatch " +
+        "expected_version=$EXPECTED_CAST_RECEIVER_VERSION " +
+        "actual_version=${sanitizeReceiverLogValue(actualVersion)} " +
+        "missing_fields=${missingFields.joinToString(",")}"
+}
+
+private fun receiverRuntimeMissingFields(status: CastReceiverStatus): List<String> {
+    return buildList {
+        if (status.receiverVersion == null) add("receiverVersion")
+        if (status.buffering == null) add("buffering")
+        if (status.playerState == null) add("playerState")
+        if (status.playbackRate == null) add("playbackRate")
+    }
+}
+
+internal fun receiverDiagnosticLogLine(diagnostic: CastReceiverDiagnostic): String {
+    val fields = diagnostic.fields.entries.joinToString(" ") { (key, value) ->
+        "$key=${sanitizeReceiverLogValue(value)}"
+    }
+    return "cast action=receiver_diagnostic " +
+        "receiver_action=${sanitizeReceiverLogValue(diagnostic.action)}" +
+        if (fields.isBlank()) "" else " $fields"
+}
+
+private fun sanitizeReceiverLogValue(value: Any?): String {
+    return value
+        ?.toString()
+        ?.replace(Regex("\\s+"), "_")
+        ?.take(160)
+        .orEmpty()
+}
+
+internal data class ExistingCastSessionStartupActions(
+    val attachReceiverChannel: Boolean,
+    val startKeepAlive: Boolean,
+    val emitRoutes: Boolean,
+    val loadCurrent: Boolean,
+)
+
+internal fun existingCastSessionStartupActions(
+    sessionConnected: Boolean,
+    pendingLoad: Boolean,
+): ExistingCastSessionStartupActions {
+    return ExistingCastSessionStartupActions(
+        attachReceiverChannel = sessionConnected,
+        startKeepAlive = sessionConnected,
+        emitRoutes = sessionConnected,
+        loadCurrent = sessionConnected && pendingLoad,
+    )
 }

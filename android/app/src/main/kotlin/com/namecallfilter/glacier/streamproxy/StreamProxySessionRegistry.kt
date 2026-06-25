@@ -40,4 +40,11 @@ object StreamProxySessionRegistry {
             client.updateConfig(config)
         }
     }
+
+    fun setLocalPlaybackSuspendedForCast(
+        webViewIdentifier: Long,
+        suspended: Boolean,
+    ) {
+        clients[webViewIdentifier]?.setLocalPlaybackSuspendedForCast(suspended)
+    }
 }

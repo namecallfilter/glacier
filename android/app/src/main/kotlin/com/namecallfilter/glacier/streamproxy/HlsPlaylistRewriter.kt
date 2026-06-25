@@ -25,11 +25,31 @@ object HlsPlaylistRewriter {
     data class RewriteResult(
         val body: String,
         val selectedQuality: String?,
+        val mediaSequence: Long? = null,
+        val discontinuitySequence: Long? = null,
+        val segmentCount: Int? = null,
+        val prefetchUrls: List<String> = emptyList(),
     )
 
     private data class RequestedVideoQuality(
         val height: Int,
         val frameRate: Int?,
+    )
+
+    private data class MediaPlaylistTrimResult(
+        val lines: List<String>,
+        val mediaSequence: Long?,
+        val discontinuitySequence: Long?,
+        val segmentCount: Int,
+    )
+
+    private data class MediaSegment(
+        val sequenceOffset: Int,
+        val lines: List<String>,
+        val durationSeconds: Double,
+        val activeKeyLine: String?,
+        val activeMapLine: String?,
+        val discontinuityCount: Int,
     )
 
     fun parseMasterPlaylist(body: String, baseUrl: String): MasterPlaylist {
@@ -54,11 +74,17 @@ object HlsPlaylistRewriter {
             )
         }
 
+        val trimmed = trimMediaPlaylist(lines)
+        val prefetchUrls = mediaPrefetchUrls(trimmed.lines, baseUrl)
         return RewriteResult(
-            body = lines
+            body = trimmed.lines
                 .map { line -> rewriteMediaPlaylistLine(line, baseUrl, rewriteUrl) }
                 .joinToString("\n"),
             selectedQuality = null,
+            mediaSequence = trimmed.mediaSequence,
+            discontinuitySequence = trimmed.discontinuitySequence,
+            segmentCount = trimmed.segmentCount,
+            prefetchUrls = prefetchUrls,
         )
     }
 
@@ -69,6 +95,7 @@ object HlsPlaylistRewriter {
         rewriteUrl: (String) -> String,
     ): RewriteResult {
         val selectedVariant = selectVariant(variants, selectedQuality)
+        val exposesAllVariants = exposesAllVariants(selectedQuality)
         val variantByStreamInfoIndex = variants.associateBy { it.streamInfoIndex }
         val output = mutableListOf<String>()
         var lineIndex = 0
@@ -81,7 +108,7 @@ object HlsPlaylistRewriter {
                 continue
             }
 
-            if (selectedVariant == null || selectedVariant == variant) {
+            if (exposesAllVariants || selectedVariant == variant) {
                 output.add(variant.streamInfoLine)
                 output.add(rewriteUrl(variant.url))
             }
@@ -92,6 +119,209 @@ object HlsPlaylistRewriter {
             body = output.joinToString("\n"),
             selectedQuality = selectedVariant?.quality,
         )
+    }
+
+    private fun trimMediaPlaylist(lines: List<String>): MediaPlaylistTrimResult {
+        val headerLines = mutableListOf<String>()
+        val segments = mutableListOf<MediaSegment>()
+        val pendingSegmentLines = mutableListOf<String>()
+        var activeKeyLine: String? = null
+        var activeMapLine: String? = null
+        var mediaSequence = 0L
+        var discontinuitySequence = 0L
+        var targetDurationSeconds: Double? = null
+        var sawMediaSequence = false
+        var sawDiscontinuitySequence = false
+        var sawSegment = false
+
+        fun addHeaderLine(line: String) {
+            val trimmed = line.trim()
+            when {
+                isMediaSequenceLine(trimmed) -> {
+                    mediaSequence = trimmed.substringAfter(":").trim().toLongOrNull() ?: 0L
+                    sawMediaSequence = true
+                }
+                isDiscontinuitySequenceLine(trimmed) -> {
+                    discontinuitySequence = trimmed.substringAfter(":").trim().toLongOrNull() ?: 0L
+                    sawDiscontinuitySequence = true
+                }
+                isKeyLine(trimmed) -> activeKeyLine = line
+                isMapLine(trimmed) -> activeMapLine = line
+                else -> {
+                    targetDurationSeconds = targetDurationSeconds
+                        ?: targetDurationFromLine(trimmed)
+                    headerLines += line
+                }
+            }
+        }
+
+        lines.forEach { line ->
+            val trimmed = line.trim()
+            when {
+                !sawSegment &&
+                    !isUriLine(trimmed) &&
+                    !isSegmentScopedLine(trimmed) -> addHeaderLine(line)
+                isKeyLine(trimmed) -> {
+                    activeKeyLine = line
+                    pendingSegmentLines += line
+                }
+                isMapLine(trimmed) -> {
+                    activeMapLine = line
+                    pendingSegmentLines += line
+                }
+                isUriLine(trimmed) -> {
+                    pendingSegmentLines += line
+                    segments += MediaSegment(
+                        sequenceOffset = segments.size,
+                        lines = pendingSegmentLines.toList(),
+                        durationSeconds = segmentDurationSeconds(
+                            lines = pendingSegmentLines,
+                            fallbackDuration = targetDurationSeconds,
+                        ),
+                        activeKeyLine = activeKeyLine,
+                        activeMapLine = activeMapLine,
+                        discontinuityCount = pendingSegmentLines.count { pendingLine ->
+                            isDiscontinuityLine(pendingLine.trim())
+                        },
+                    )
+                    pendingSegmentLines.clear()
+                    sawSegment = true
+                }
+                else -> pendingSegmentLines += line
+            }
+        }
+
+        if (segments.isEmpty()) {
+            return MediaPlaylistTrimResult(
+                lines = lines,
+                mediaSequence = mediaSequence.takeIf { sawMediaSequence },
+                discontinuitySequence = discontinuitySequence.takeIf { sawDiscontinuitySequence },
+                segmentCount = 0,
+            )
+        }
+
+        val firstRetainedIndex = firstRetainedSegmentIndex(segments)
+        val retainedSegments = segments.drop(firstRetainedIndex)
+        val firstRetainedSegment = retainedSegments.first()
+        val droppedDiscontinuityCount = segments
+            .take(firstRetainedIndex)
+            .sumOf(MediaSegment::discontinuityCount)
+        val correctedMediaSequence = mediaSequence + firstRetainedSegment.sequenceOffset
+        val correctedDiscontinuitySequence = discontinuitySequence + droppedDiscontinuityCount
+        val output = mutableListOf<String>()
+
+        appendHeaderWithSequences(
+            output = output,
+            headerLines = headerLines,
+            mediaSequence = correctedMediaSequence,
+            discontinuitySequence = correctedDiscontinuitySequence,
+            includeDiscontinuitySequence = sawDiscontinuitySequence ||
+                correctedDiscontinuitySequence > 0L,
+        )
+
+        if (
+            firstRetainedSegment.activeKeyLine != null &&
+            firstRetainedSegment.lines.none { line -> isKeyLine(line.trim()) }
+        ) {
+            output += firstRetainedSegment.activeKeyLine
+        }
+        if (
+            firstRetainedSegment.activeMapLine != null &&
+            firstRetainedSegment.lines.none { line -> isMapLine(line.trim()) }
+        ) {
+            output += firstRetainedSegment.activeMapLine
+        }
+
+        retainedSegments.forEach { segment ->
+            output.addAll(segment.lines)
+        }
+        output.addAll(pendingSegmentLines)
+
+        return MediaPlaylistTrimResult(
+            lines = output,
+            mediaSequence = correctedMediaSequence,
+            discontinuitySequence = correctedDiscontinuitySequence,
+            segmentCount = retainedSegments.size,
+        )
+    }
+
+    private fun appendHeaderWithSequences(
+        output: MutableList<String>,
+        headerLines: List<String>,
+        mediaSequence: Long,
+        discontinuitySequence: Long,
+        includeDiscontinuitySequence: Boolean,
+    ) {
+        var insertedSequences = false
+
+        headerLines.forEachIndexed { index, line ->
+            output += line
+            if (!insertedSequences && line.trim().equals("#EXTM3U", ignoreCase = true)) {
+                output += "#EXT-X-MEDIA-SEQUENCE:$mediaSequence"
+                if (includeDiscontinuitySequence) {
+                    output += "#EXT-X-DISCONTINUITY-SEQUENCE:$discontinuitySequence"
+                }
+                insertedSequences = true
+            } else if (!insertedSequences && index == headerLines.lastIndex) {
+                output += "#EXT-X-MEDIA-SEQUENCE:$mediaSequence"
+                if (includeDiscontinuitySequence) {
+                    output += "#EXT-X-DISCONTINUITY-SEQUENCE:$discontinuitySequence"
+                }
+                insertedSequences = true
+            }
+        }
+
+        if (!insertedSequences) {
+            output += "#EXT-X-MEDIA-SEQUENCE:$mediaSequence"
+            if (includeDiscontinuitySequence) {
+                output += "#EXT-X-DISCONTINUITY-SEQUENCE:$discontinuitySequence"
+            }
+        }
+    }
+
+    private fun firstRetainedSegmentIndex(segments: List<MediaSegment>): Int {
+        var retainedDuration = 0.0
+        var firstRetainedIndex = segments.lastIndex
+
+        for (index in segments.lastIndex downTo 0) {
+            val duration = segments[index].durationSeconds.coerceAtLeast(0.0)
+            val nextDuration = retainedDuration + duration
+            if (retainedDuration > 0.0 && nextDuration > MEDIA_PLAYLIST_WINDOW_SECONDS) {
+                break
+            }
+
+            retainedDuration = nextDuration
+            firstRetainedIndex = index
+        }
+
+        return firstRetainedIndex
+    }
+
+    private fun segmentDurationSeconds(
+        lines: List<String>,
+        fallbackDuration: Double?,
+    ): Double {
+        return lines
+            .firstNotNullOfOrNull { line ->
+                val trimmed = line.trim()
+                if (!trimmed.startsWith("#EXTINF:", ignoreCase = true)) {
+                    return@firstNotNullOfOrNull null
+                }
+
+                trimmed
+                    .substringAfter(":")
+                    .substringBefore(",")
+                    .trim()
+                    .toDoubleOrNull()
+            }
+            ?: fallbackDuration
+            ?: 0.0
+    }
+
+    private fun targetDurationFromLine(line: String): Double? {
+        if (!line.startsWith("#EXT-X-TARGETDURATION:", ignoreCase = true)) return null
+
+        return line.substringAfter(":").trim().toDoubleOrNull()
     }
 
     private fun selectVariant(
@@ -110,6 +340,15 @@ object HlsPlaylistRewriter {
             "source" -> highestVariant(variants)
             else -> selectNamedVariant(variants, normalizedQuality)
         }
+    }
+
+    private fun exposesAllVariants(selectedQuality: String?): Boolean {
+        val normalizedQuality = selectedQuality
+            ?.trim()
+            ?.lowercase(Locale.US)
+            ?.takeIf(String::isNotEmpty)
+
+        return normalizedQuality == null || normalizedQuality == "auto"
     }
 
     private fun selectNamedVariant(
@@ -177,6 +416,68 @@ object HlsPlaylistRewriter {
         }
 
         return rewriteUrl(resolveUrl(baseUrl, trimmed))
+    }
+
+    private fun mediaPrefetchUrls(lines: List<String>, baseUrl: String): List<String> {
+        return lines.mapNotNull { line -> mediaPrefetchUrl(line, baseUrl) }
+    }
+
+    private fun mediaPrefetchUrl(line: String, baseUrl: String): String? {
+        val trimmed = line.trim()
+        if (trimmed.isEmpty()) return null
+
+        if (!trimmed.startsWith("#")) {
+            return resolveUrl(baseUrl, trimmed)
+        }
+
+        if (
+            trimmed.startsWith("#EXT-X-PART:", ignoreCase = true) ||
+            trimmed.startsWith("#EXT-X-PRELOAD-HINT:", ignoreCase = true)
+        ) {
+            return uriAttributeRegex.find(line)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.let { originalUrl -> resolveUrl(baseUrl, originalUrl) }
+        }
+
+        return null
+    }
+
+    private fun isUriLine(trimmedLine: String): Boolean {
+        return trimmedLine.isNotEmpty() && !trimmedLine.startsWith("#")
+    }
+
+    private fun isMediaSequenceLine(trimmedLine: String): Boolean {
+        return trimmedLine.startsWith("#EXT-X-MEDIA-SEQUENCE:", ignoreCase = true)
+    }
+
+    private fun isDiscontinuitySequenceLine(trimmedLine: String): Boolean {
+        return trimmedLine.startsWith("#EXT-X-DISCONTINUITY-SEQUENCE:", ignoreCase = true)
+    }
+
+    private fun isDiscontinuityLine(trimmedLine: String): Boolean {
+        return trimmedLine.equals("#EXT-X-DISCONTINUITY", ignoreCase = true)
+    }
+
+    private fun isKeyLine(trimmedLine: String): Boolean {
+        return trimmedLine.startsWith("#EXT-X-KEY:", ignoreCase = true)
+    }
+
+    private fun isMapLine(trimmedLine: String): Boolean {
+        return trimmedLine.startsWith("#EXT-X-MAP:", ignoreCase = true)
+    }
+
+    private fun isSegmentScopedLine(trimmedLine: String): Boolean {
+        return trimmedLine.startsWith("#EXTINF:", ignoreCase = true) ||
+            trimmedLine.startsWith("#EXT-X-PART:", ignoreCase = true) ||
+            trimmedLine.startsWith("#EXT-X-BYTERANGE:", ignoreCase = true) ||
+            trimmedLine.startsWith("#EXT-X-PROGRAM-DATE-TIME:", ignoreCase = true) ||
+            trimmedLine.startsWith("#EXT-X-DATERANGE:", ignoreCase = true) ||
+            trimmedLine.startsWith("#EXT-X-GAP", ignoreCase = true) ||
+            trimmedLine.startsWith("#EXT-X-CUE", ignoreCase = true) ||
+            trimmedLine.startsWith("#EXT-X-ASSET:", ignoreCase = true) ||
+            trimmedLine.startsWith("#EXT-OATCLS", ignoreCase = true) ||
+            isDiscontinuityLine(trimmedLine)
     }
 
     private fun parseVariants(lines: List<String>, baseUrl: String): List<Variant> {
@@ -309,6 +610,8 @@ object HlsPlaylistRewriter {
         return runCatching { URI(baseUrl).resolve(value).toString() }
             .getOrDefault(value)
     }
+
+    private const val MEDIA_PLAYLIST_WINDOW_SECONDS = 30.0
 
     private val uriAttributeRegex = Regex("""URI="([^"]+)"""")
     private val requestedVideoQualityRegex = Regex(

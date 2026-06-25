@@ -12,15 +12,34 @@ import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.Collections
+import java.util.LinkedHashMap
 import java.util.Locale
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 
 class CastRelayServer(
     private val log: (String) -> Unit,
+    private val nowMs: () -> Long = { System.currentTimeMillis() },
+    private val mediaTargetTtlMs: Long = DEFAULT_MEDIA_TARGET_TTL_MS,
+    private val maxMediaTargets: Int = DEFAULT_MAX_MEDIA_TARGETS,
+    private val maxPlaylistTargets: Int = DEFAULT_MAX_PLAYLIST_TARGETS,
+    private val segmentCacheTtlMs: Long = DEFAULT_SEGMENT_CACHE_TTL_MS,
+    private val maxSegmentCacheEntries: Int = DEFAULT_MAX_SEGMENT_CACHE_ENTRIES,
+    private val maxSegmentCacheBytes: Long = DEFAULT_MAX_SEGMENT_CACHE_BYTES,
 ) : Closeable {
     private val targets = ConcurrentHashMap<String, RelayTarget>()
-    private val targetIds = ConcurrentHashMap<String, String>()
     private val fetcher = StreamProxyFetcher(log)
+    private val segmentFetchExecutor = RestartableSegmentExecutor(SEGMENT_FETCH_THREADS)
+    private val segmentCache = SegmentMemoryCache(
+        nowMs = nowMs,
+        ttlMs = segmentCacheTtlMs,
+        maxEntries = maxSegmentCacheEntries,
+        maxBytes = maxSegmentCacheBytes,
+        executor = segmentFetchExecutor,
+    )
 
     @Volatile
     private var router = StreamProxyRequestRouter()
@@ -54,13 +73,17 @@ class CastRelayServer(
     ): String {
         ensureStarted()
         val relayBaseUrl = baseUrl ?: error("Cast relay did not start")
+        val now = nowMs()
+        evictTargets(now)
         val key = "$sourceUrl\n${selectedQuality.orEmpty()}"
-        val id = targetIds.getOrPut(key) {
-            stableTargetId(key)
-        }
+        val id = stableTargetId(key)
+        val existingTarget = targets[id]
         targets[id] = RelayTarget(
             sourceUrl = sourceUrl,
             selectedQuality = selectedQuality,
+            kind = targetKindFor(sourceUrl),
+            createdMs = existingTarget?.createdMs ?: now,
+            lastAccessMs = now,
         )
 
         return "$relayBaseUrl/relay/$id.${extensionFor(sourceUrl)}"
@@ -71,7 +94,8 @@ class CastRelayServer(
         serverSocket = null
         baseUrl = null
         targets.clear()
-        targetIds.clear()
+        segmentCache.clear()
+        segmentFetchExecutor.shutdownNow()
     }
 
     private fun ensureStarted() {
@@ -122,9 +146,12 @@ class CastRelayServer(
 
     private fun handleClient(socket: Socket) {
         socket.use { client ->
+            val requestStartedNs = System.nanoTime()
+            var requestForLog: HttpRequest? = null
             try {
                 val request = readRequest(client)
                     ?: return
+                requestForLog = request
                 log(
                     "cast_relay action=request method=${request.method} " +
                         "path=${request.target.substringBefore("?")} " +
@@ -145,7 +172,15 @@ class CastRelayServer(
                     else -> sendError(client, 405, "Method Not Allowed")
                 }
             } catch (error: Exception) {
-                log("cast_relay action=request_failed reason=${error.javaClass.simpleName}")
+                log(
+                    relayRequestFailedLogLine(
+                        method = requestForLog?.method,
+                        path = requestForLog?.target?.substringBefore("?"),
+                        totalMs = elapsedMs(requestStartedNs),
+                        reason = error.javaClass.simpleName,
+                        clientAborted = isLikelyClientAbort(error),
+                    ),
+                )
                 runCatching { sendError(client, 500, "Internal Server Error") }
             }
         }
@@ -159,7 +194,8 @@ class CastRelayServer(
             log(
                 "cast_relay action=response method=${request.method} " +
                     "path=$path status=404 total_ms=${elapsedMs(requestStartedNs)} " +
-                    "bytes=9 playlist=false reason=invalid_path",
+                    "bytes=9 playlist=false reason=invalid_path " +
+                    "relay_targets=${targets.size}",
             )
             return
         }
@@ -168,23 +204,49 @@ class CastRelayServer(
             .removePrefix("/relay/")
             .substringBefore(".")
             .takeIf(String::isNotEmpty)
+        val now = nowMs()
+        evictTargets(now)
+        if (id == null) {
+            sendError(socket, 404, "Not Found")
+            log(
+                "cast_relay action=response method=${request.method} " +
+                    "path=$path status=404 total_ms=${elapsedMs(requestStartedNs)} " +
+                    "bytes=9 playlist=false reason=missing_target " +
+                    "relay_targets=${targets.size}",
+            )
+            return
+        }
         val target = targets[id]
         if (target == null) {
             sendError(socket, 404, "Not Found")
             log(
                 "cast_relay action=response method=${request.method} " +
                     "path=$path status=404 total_ms=${elapsedMs(requestStartedNs)} " +
-                    "bytes=9 playlist=false reason=missing_target",
+                    "bytes=9 playlist=false reason=missing_target " +
+                    "relay_targets=${targets.size}",
             )
             return
         }
+        if (target.isExpired(now, mediaTargetTtlMs)) {
+            targets.remove(id, target)
+            sendError(socket, 404, "Not Found")
+            log(
+                "cast_relay action=response method=${request.method} " +
+                    "path=$path status=404 total_ms=${elapsedMs(requestStartedNs)} " +
+                    "bytes=9 playlist=false reason=expired_target " +
+                    "relay_targets=${targets.size}",
+            )
+            return
+        }
+        targets[id] = target.copy(lastAccessMs = now)
 
         val currentConfig = config
+        val currentRouter = router
         val upstreamUrl = upstreamUrlFor(
             sourceUrl = target.sourceUrl,
             relayTarget = request.target,
         )
-        val playlistRequest = isPlaylistUrl(target.sourceUrl)
+        val playlistRequest = target.kind == RelayTargetKind.PLAYLIST
         val requestHeaders = CastRelayUpstreamHeaders.build(
             requestHeaders = request.headers,
             config = currentConfig,
@@ -195,27 +257,41 @@ class CastRelayServer(
         } else {
             "GET"
         }
+        if (!playlistRequest) {
+            handleMediaRelayRequest(
+                socket = socket,
+                request = request,
+                path = path,
+                upstreamUrl = upstreamUrl,
+                requestHeaders = requestHeaders,
+                currentConfig = currentConfig,
+                currentRouter = currentRouter,
+                requestStartedNs = requestStartedNs,
+            )
+            return
+        }
         val upstreamRequest = StreamProxyRequest(
             url = upstreamUrl,
             method = upstreamMethod,
             headers = requestHeaders,
         )
-        val decision = router.route(
+        val decision = currentRouter.route(
             url = target.sourceUrl,
             method = upstreamMethod,
             headers = requestHeaders,
             config = currentConfig,
         )
-        val response = fetcher.fetch(
+        var effectiveUpstreamUrl = upstreamUrl
+        val initialResponse = fetcher.fetch(
             request = upstreamRequest,
             decision = decision,
             config = currentConfig,
-            router = router,
+            router = currentRouter,
             directWhenSkipped = true,
         )
         val upstreamConnectedNs = System.nanoTime()
 
-        if (response == null) {
+        if (initialResponse == null) {
             sendError(socket, 502, "Bad Gateway")
             log(
                 "cast_relay action=response method=${request.method} " +
@@ -224,9 +300,28 @@ class CastRelayServer(
                     "upstream_connect_ms=${elapsedMs(requestStartedNs, upstreamConnectedNs)} " +
                     "upstream_first_byte_ms=-1 " +
                     "total_ms=${elapsedMs(requestStartedNs)} " +
-                    "bytes=11 playlist=$playlistRequest reason=upstream_null",
+                    "bytes=11 playlist=$playlistRequest reason=upstream_null " +
+                    "relay_targets=${targets.size}",
             )
             return
+        }
+
+        var response = initialResponse
+        if (playlistRequest && isStaleStatus(response.statusCode)) {
+            val refreshedResponse = refreshStalePlaylist(
+                originalUpstreamUrl = upstreamUrl,
+                upstreamMethod = upstreamMethod,
+                requestHeaders = requestHeaders,
+                currentConfig = currentConfig,
+                router = currentRouter,
+                selectedQuality = target.selectedQuality,
+                path = path,
+            )
+            if (refreshedResponse != null) {
+                response.close()
+                response = refreshedResponse.response
+                effectiveUpstreamUrl = refreshedResponse.upstreamUrl
+            }
         }
 
         response.use { upstream ->
@@ -234,9 +329,44 @@ class CastRelayServer(
             val headers = responseHeaders(upstream)
             var mimeType = upstream.mimeType
             var selectedQuality: String? = null
-            val playlistResponse = isPlaylistResponse(upstreamUrl, upstream)
+            val playlistResponse = isPlaylistResponse(effectiveUpstreamUrl, upstream)
             var firstByteNs: Long? = null
             var playlistMetadata = PlaylistLiveEdgeMetadata()
+
+            if (isStaleStatus(upstream.statusCode)) {
+                val timedBody = if (headOnly) {
+                    TimedBody(bytes = ByteArray(0), firstByteNs = null)
+                } else {
+                    readBodyWithTiming(upstream.body)
+                }
+                firstByteNs = timedBody.firstByteNs
+                if (mimeType != null) {
+                    headers["Content-Type"] = mimeType
+                }
+                headers.putAll(corsHeaders())
+                headers["Content-Length"] = timedBody.bytes.size.toString()
+
+                sendResponse(
+                    socket = socket,
+                    statusCode = upstream.statusCode,
+                    reasonPhrase = upstream.reasonPhrase,
+                    headers = headers,
+                    body = timedBody.bytes,
+                    headOnly = headOnly,
+                )
+                log(
+                    "cast_relay action=response method=${request.method} " +
+                        "path=$path status=${upstream.statusCode} " +
+                        "source=${sourceDescription(effectiveUpstreamUrl)} " +
+                        "upstream_connect_ms=${elapsedMs(requestStartedNs, upstreamConnectedNs)} " +
+                        "upstream_first_byte_ms=${elapsedMsOrMissing(requestStartedNs, firstByteNs)} " +
+                        "total_ms=${elapsedMs(requestStartedNs)} " +
+                        "bytes=${timedBody.bytes.size} mime=${mimeType.orEmpty()} " +
+                        "playlist=$playlistRequest selected_quality= " +
+                        "reason=stale_upstream relay_targets=${targets.size}",
+                )
+                return@use
+            }
 
             if (playlistResponse) {
                 val body = if (headOnly) {
@@ -245,21 +375,39 @@ class CastRelayServer(
                     val timedBody = readBodyWithTiming(upstream.body)
                     firstByteNs = timedBody.firstByteNs
                     val playlist = decodeBody(timedBody.bytes, upstream.encoding)
-                    playlistMetadata = playlistLiveEdgeMetadata(playlist)
                     val rewritten = HlsPlaylistRewriter.rewritePlaylist(
                         body = playlist,
-                        baseUrl = upstreamUrl,
+                        baseUrl = effectiveUpstreamUrl,
                         selectedQuality = target.selectedQuality,
                         rewriteUrl = { nestedSourceUrl ->
                             relayUrlFor(nestedSourceUrl)
                         },
                     )
+                    prefetchMediaTargets(
+                        sourceUrls = rewritten.prefetchUrls,
+                        currentConfig = currentConfig,
+                        currentRouter = currentRouter,
+                        requestHeaders = request.headers,
+                    )
                     selectedQuality = rewritten.selectedQuality
+                    val rewrittenMetadata = playlistLiveEdgeMetadata(rewritten.body)
+                    playlistMetadata = rewrittenMetadata.copy(
+                        mediaSequence = rewritten.mediaSequence?.toString()
+                            ?: rewrittenMetadata.mediaSequence,
+                        discontinuitySequence = rewritten.discontinuitySequence?.toString()
+                            ?: rewrittenMetadata.discontinuitySequence,
+                        segmentCount = rewritten.segmentCount
+                            ?: rewrittenMetadata.segmentCount,
+                    )
                     log(
                         "cast_relay action=playlist_edge " +
                             "path=$path media_sequence=${playlistMetadata.mediaSequence.orEmpty()} " +
+                            "discontinuity_sequence=${playlistMetadata.discontinuitySequence.orEmpty()} " +
+                            "segment_count=${playlistMetadata.segmentCount} " +
                             "program_date_time=${sanitizeLogValue(playlistMetadata.programDateTime)} " +
-                            "target_duration=${playlistMetadata.targetDuration.orEmpty()}",
+                            "target_duration=${playlistMetadata.targetDuration.orEmpty()} " +
+                            "playlist_bytes=${timedBody.bytes.size} " +
+                            "relay_targets=${targets.size}",
                     )
                     rewritten.body.toByteArray(StandardCharsets.UTF_8)
                 }
@@ -280,15 +428,18 @@ class CastRelayServer(
                 log(
                     "cast_relay action=response method=${request.method} " +
                         "path=$path status=${upstream.statusCode} " +
-                        "source=${sourceDescription(upstreamUrl)} " +
+                        "source=${sourceDescription(effectiveUpstreamUrl)} " +
                         "upstream_connect_ms=${elapsedMs(requestStartedNs, upstreamConnectedNs)} " +
                         "upstream_first_byte_ms=${elapsedMsOrMissing(requestStartedNs, firstByteNs)} " +
                         "total_ms=${elapsedMs(requestStartedNs)} " +
                         "bytes=${body.size} mime=${mimeType.orEmpty()} " +
                         "playlist=true selected_quality=${selectedQuality.orEmpty()} " +
                         "media_sequence=${playlistMetadata.mediaSequence.orEmpty()} " +
+                        "discontinuity_sequence=${playlistMetadata.discontinuitySequence.orEmpty()} " +
+                        "segment_count=${playlistMetadata.segmentCount} " +
                         "program_date_time=${sanitizeLogValue(playlistMetadata.programDateTime)} " +
-                        "target_duration=${playlistMetadata.targetDuration.orEmpty()}",
+                        "target_duration=${playlistMetadata.targetDuration.orEmpty()} " +
+                        "relay_targets=${targets.size}",
                 )
                 return@use
             }
@@ -317,14 +468,298 @@ class CastRelayServer(
             log(
                 "cast_relay action=response method=${request.method} " +
                     "path=$path status=${upstream.statusCode} " +
-                    "source=${sourceDescription(upstreamUrl)} " +
+                    "source=${sourceDescription(effectiveUpstreamUrl)} " +
                     "upstream_connect_ms=${elapsedMs(requestStartedNs, upstreamConnectedNs)} " +
                     "upstream_first_byte_ms=" +
                     "${elapsedMsOrMissing(requestStartedNs, streamResult.firstByteNs)} " +
                     "total_ms=${elapsedMs(requestStartedNs)} " +
                     "bytes=${streamResult.bytes} mime=${mimeType.orEmpty()} " +
-                    "playlist=false selected_quality=",
+                    "playlist=false selected_quality= relay_targets=${targets.size}",
             )
+        }
+    }
+
+    private fun handleMediaRelayRequest(
+        socket: Socket,
+        request: HttpRequest,
+        path: String,
+        upstreamUrl: String,
+        requestHeaders: Map<String, String>,
+        currentConfig: StreamProxyConfig,
+        currentRouter: StreamProxyRequestRouter,
+        requestStartedNs: Long,
+    ) {
+        val acquire = segmentCache.getOrStart(
+            key = upstreamUrl,
+            prefetch = false,
+        ) {
+            fetchSegmentForCache(
+                upstreamUrl = upstreamUrl,
+                requestHeaders = requestHeaders,
+                currentConfig = currentConfig,
+                currentRouter = currentRouter,
+            )
+        }
+        val waitStartedNs = System.nanoTime()
+        val cachedResponse = try {
+            acquire.future.get()
+        } catch (error: Exception) {
+            if (error is InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+            sendError(socket, 502, "Bad Gateway")
+            log(
+                "cast_relay action=response method=${request.method} " +
+                    "path=$path status=502 " +
+                    "source=${sourceDescription(upstreamUrl)} " +
+                    "upstream_connect_ms=-1 upstream_first_byte_ms=-1 " +
+                    "upstream_read_complete_ms=-1 downstream_write_complete_ms=-1 " +
+                    "total_ms=${elapsedMs(requestStartedNs)} bytes=11 mime=text/plain " +
+                    "playlist=false selected_quality= relay_targets=${targets.size} " +
+                    "cache_hit=${acquire.cacheHit} " +
+                    "cache_wait_ms=${elapsedMs(waitStartedNs)} " +
+                    "prefetch_lead_ms=${prefetchLeadMs(acquire, requestStartedNs)} " +
+                    "upstream_mbps=0.00 downstream_mbps=0.00 route=direct " +
+                    "reason=${error.javaClass.simpleName}",
+            )
+            return
+        }
+        val cacheWaitMs = if (acquire.cacheHit) {
+            0L
+        } else {
+            elapsedMs(waitStartedNs)
+        }
+        val headOnly = request.method.equals("HEAD", ignoreCase = true)
+        val downstreamStartedNs = System.nanoTime()
+        sendResponse(
+            socket = socket,
+            statusCode = cachedResponse.statusCode,
+            reasonPhrase = cachedResponse.reasonPhrase,
+            headers = cachedResponse.headers,
+            body = cachedResponse.bytes,
+            headOnly = headOnly,
+        )
+        val downstreamCompleteNs = System.nanoTime()
+
+        log(
+            "cast_relay action=response method=${request.method} " +
+                "path=$path status=${cachedResponse.statusCode} " +
+                "source=${sourceDescription(upstreamUrl)} " +
+                "upstream_connect_ms=${elapsedMs(cachedResponse.fetchStartedNs, cachedResponse.upstreamConnectedNs)} " +
+                "upstream_first_byte_ms=" +
+                "${elapsedMsOrMissing(cachedResponse.fetchStartedNs, cachedResponse.upstreamFirstByteNs)} " +
+                "upstream_read_complete_ms=" +
+                "${elapsedMs(cachedResponse.fetchStartedNs, cachedResponse.upstreamReadCompleteNs)} " +
+                "downstream_write_complete_ms=${elapsedMs(downstreamStartedNs, downstreamCompleteNs)} " +
+                "total_ms=${elapsedMs(requestStartedNs, downstreamCompleteNs)} " +
+                "bytes=${cachedResponse.bytes.size} mime=${cachedResponse.mimeType.orEmpty()} " +
+                "playlist=false selected_quality= relay_targets=${targets.size} " +
+                "cache_hit=${acquire.cacheHit} cache_wait_ms=$cacheWaitMs " +
+                "prefetch_lead_ms=${prefetchLeadMs(acquire, requestStartedNs)} " +
+                "upstream_mbps=" +
+                "${mbps(cachedResponse.bytes.size, cachedResponse.upstreamFirstByteNs, cachedResponse.upstreamReadCompleteNs)} " +
+                "downstream_mbps=${mbps(cachedResponse.bytes.size, downstreamStartedNs, downstreamCompleteNs)} " +
+                "route=${cachedResponse.route}",
+        )
+    }
+
+    private fun prefetchMediaTargets(
+        sourceUrls: List<String>,
+        currentConfig: StreamProxyConfig,
+        currentRouter: StreamProxyRequestRouter,
+        requestHeaders: Map<String, String>,
+    ) {
+        val limit = maxSegmentCacheEntries.coerceAtLeast(0)
+        if (limit == 0 || sourceUrls.isEmpty()) return
+
+        val mediaRequestHeaders = CastRelayUpstreamHeaders.build(
+            requestHeaders = requestHeaders,
+            config = currentConfig,
+            isPlaylistRequest = false,
+        )
+        sourceUrls
+            .distinct()
+            .takeLast(limit)
+            .forEach { sourceUrl ->
+                try {
+                    segmentCache.getOrStart(
+                        key = sourceUrl,
+                        prefetch = true,
+                    ) {
+                        fetchSegmentForCache(
+                            upstreamUrl = sourceUrl,
+                            requestHeaders = mediaRequestHeaders,
+                            currentConfig = currentConfig,
+                            currentRouter = currentRouter,
+                        )
+                    }
+                } catch (error: RejectedExecutionException) {
+                    log(
+                        "cast_relay action=prefetch_rejected " +
+                            "source=${sourceDescription(sourceUrl)} " +
+                            "reason=${error.javaClass.simpleName}",
+                    )
+                }
+            }
+    }
+
+    private fun fetchSegmentForCache(
+        upstreamUrl: String,
+        requestHeaders: Map<String, String>,
+        currentConfig: StreamProxyConfig,
+        currentRouter: StreamProxyRequestRouter,
+    ): CachedSegmentResponse {
+        val fetchStartedNs = System.nanoTime()
+        val upstreamMethod = "GET"
+        val decision = currentRouter.route(
+            url = upstreamUrl,
+            method = upstreamMethod,
+            headers = requestHeaders,
+            config = currentConfig,
+        )
+        val upstreamRequest = StreamProxyRequest(
+            url = upstreamUrl,
+            method = upstreamMethod,
+            headers = requestHeaders,
+        )
+        val upstreamResponse = fetcher.fetch(
+            request = upstreamRequest,
+            decision = decision,
+            config = currentConfig,
+            router = currentRouter,
+            directWhenSkipped = true,
+        )
+        val upstreamConnectedNs = System.nanoTime()
+
+        if (upstreamResponse == null) {
+            val body = "Bad Gateway".toByteArray(StandardCharsets.UTF_8)
+            val headers = corsHeaders() + mapOf(
+                "Content-Type" to "text/plain; charset=utf-8",
+                "Content-Length" to body.size.toString(),
+            )
+            return CachedSegmentResponse(
+                statusCode = 502,
+                reasonPhrase = "Bad Gateway",
+                headers = headers,
+                bytes = body,
+                mimeType = "text/plain",
+                fetchStartedNs = fetchStartedNs,
+                upstreamConnectedNs = upstreamConnectedNs,
+                upstreamFirstByteNs = null,
+                upstreamReadCompleteNs = upstreamConnectedNs,
+                route = routeName(decision, currentConfig),
+            )
+        }
+
+        upstreamResponse.use { upstream ->
+            val headers = responseHeaders(upstream)
+            val timedBody = readBodyWithTiming(upstream.body)
+            val upstreamReadCompleteNs = System.nanoTime()
+            val mimeType = upstream.mimeType
+            if (
+                mimeType != null &&
+                headers.keys.none { it.equals("Content-Type", ignoreCase = true) }
+            ) {
+                headers["Content-Type"] = mimeType
+            }
+            headers.putAll(corsHeaders())
+            headers["Content-Length"] = timedBody.bytes.size.toString()
+
+            return CachedSegmentResponse(
+                statusCode = upstream.statusCode,
+                reasonPhrase = upstream.reasonPhrase,
+                headers = headers,
+                bytes = timedBody.bytes,
+                mimeType = mimeType,
+                fetchStartedNs = fetchStartedNs,
+                upstreamConnectedNs = upstreamConnectedNs,
+                upstreamFirstByteNs = timedBody.firstByteNs,
+                upstreamReadCompleteNs = upstreamReadCompleteNs,
+                route = routeName(decision, currentConfig),
+            )
+        }
+    }
+
+    private fun refreshStalePlaylist(
+        originalUpstreamUrl: String,
+        upstreamMethod: String,
+        requestHeaders: Map<String, String>,
+        currentConfig: StreamProxyConfig,
+        router: StreamProxyRequestRouter,
+        selectedQuality: String?,
+        path: String,
+    ): RefreshedResponse? {
+        val latestManifestUrl = router.latestUsherManifestUrl(currentConfig.currentChannelLogin)
+            ?.takeIf { latestUrl -> latestUrl != originalUpstreamUrl }
+            ?: return null
+        val decision = router.route(
+            url = latestManifestUrl,
+            method = upstreamMethod,
+            headers = requestHeaders,
+            config = currentConfig,
+        )
+        val refreshedResponse = fetcher.fetch(
+            request = StreamProxyRequest(
+                url = latestManifestUrl,
+                method = upstreamMethod,
+                headers = requestHeaders,
+            ),
+            decision = decision,
+            config = currentConfig,
+            router = router,
+            directWhenSkipped = true,
+        ) ?: return null
+
+        if (isStaleStatus(refreshedResponse.statusCode)) {
+            refreshedResponse.close()
+            log(
+                "cast_relay action=stale_manifest_refresh path=$path " +
+                    "status=failed http_status=${refreshedResponse.statusCode} " +
+                    "selected_quality=${selectedQuality.orEmpty()} " +
+                    "source=${sourceDescription(latestManifestUrl)}",
+            )
+            return null
+        }
+
+        log(
+            "cast_relay action=stale_manifest_refresh path=$path " +
+                "status=ok http_status=${refreshedResponse.statusCode} " +
+                "selected_quality=${selectedQuality.orEmpty()} " +
+                "source=${sourceDescription(latestManifestUrl)}",
+        )
+        return RefreshedResponse(
+            upstreamUrl = latestManifestUrl,
+            response = refreshedResponse,
+        )
+    }
+
+    private fun evictTargets(now: Long) {
+        val ttlCutoff = now - mediaTargetTtlMs
+        targets.entries.removeIf { entry ->
+            val target = entry.value
+            target.kind == RelayTargetKind.MEDIA &&
+                mediaTargetTtlMs >= 0L &&
+                target.lastAccessMs < ttlCutoff
+        }
+
+        evictTargetsByKind(RelayTargetKind.MEDIA, maxMediaTargets)
+        evictTargetsByKind(RelayTargetKind.PLAYLIST, maxPlaylistTargets)
+    }
+
+    private fun evictTargetsByKind(kind: RelayTargetKind, maxTargets: Int) {
+        val limit = maxTargets.coerceAtLeast(0)
+        val matchingTargets = targets.entries
+            .filter { entry -> entry.value.kind == kind }
+            .sortedWith(
+                compareBy<MutableMap.MutableEntry<String, RelayTarget>> {
+                    it.value.lastAccessMs
+                }.thenBy { it.key },
+            )
+        val removeCount = matchingTargets.size - limit
+        if (removeCount <= 0) return
+
+        matchingTargets.take(removeCount).forEach { entry ->
+            targets.remove(entry.key, entry.value)
         }
     }
 
@@ -512,6 +947,18 @@ class CastRelayServer(
         }.getOrDefault(false)
     }
 
+    private fun targetKindFor(sourceUrl: String): RelayTargetKind {
+        return if (isPlaylistUrl(sourceUrl)) {
+            RelayTargetKind.PLAYLIST
+        } else {
+            RelayTargetKind.MEDIA
+        }
+    }
+
+    private fun isStaleStatus(statusCode: Int): Boolean {
+        return statusCode == 401 || statusCode == 403 || statusCode == 404
+    }
+
     private fun upstreamUrlFor(sourceUrl: String, relayTarget: String): String {
         val relayQuery = relayTarget
             .substringAfter("?", missingDelimiterValue = "")
@@ -555,8 +1002,10 @@ class CastRelayServer(
 
     private fun playlistLiveEdgeMetadata(playlist: String): PlaylistLiveEdgeMetadata {
         var mediaSequence: String? = null
+        var discontinuitySequence: String? = null
         var programDateTime: String? = null
         var targetDuration: String? = null
+        var segmentCount = 0
 
         playlist.lineSequence()
             .map(String::trim)
@@ -566,19 +1015,27 @@ class CastRelayServer(
                     line.startsWith("#EXT-X-MEDIA-SEQUENCE:", ignoreCase = true) -> {
                         mediaSequence = line.substringAfter(":").trim()
                     }
+                    line.startsWith("#EXT-X-DISCONTINUITY-SEQUENCE:", ignoreCase = true) -> {
+                        discontinuitySequence = line.substringAfter(":").trim()
+                    }
                     line.startsWith("#EXT-X-PROGRAM-DATE-TIME:", ignoreCase = true) -> {
                         programDateTime = line.substringAfter(":").trim()
                     }
                     line.startsWith("#EXT-X-TARGETDURATION:", ignoreCase = true) -> {
                         targetDuration = line.substringAfter(":").trim()
                     }
+                    !line.startsWith("#") -> {
+                        segmentCount += 1
+                    }
                 }
             }
 
         return PlaylistLiveEdgeMetadata(
             mediaSequence = mediaSequence,
+            discontinuitySequence = discontinuitySequence,
             programDateTime = programDateTime,
             targetDuration = targetDuration,
+            segmentCount = segmentCount,
         )
     }
 
@@ -588,6 +1045,41 @@ class CastRelayServer(
 
     private fun elapsedMsOrMissing(startNs: Long, endNs: Long?): Long {
         return endNs?.let { elapsedMs(startNs, it) } ?: -1L
+    }
+
+    private fun prefetchLeadMs(
+        acquire: SegmentCacheAcquire,
+        requestStartedNs: Long,
+    ): Long {
+        if (!acquire.startedByPrefetch) return 0L
+
+        return elapsedMs(acquire.fetchStartedNs, requestStartedNs)
+    }
+
+    private fun mbps(
+        bytes: Int,
+        startNs: Long?,
+        endNs: Long,
+    ): String {
+        val effectiveStartNs = startNs ?: return "0.00"
+        val seconds = (endNs - effectiveStartNs).coerceAtLeast(1L) / 1_000_000_000.0
+        val megabits = bytes * 8.0 / 1_000_000.0
+
+        return String.format(Locale.US, "%.2f", megabits / seconds)
+    }
+
+    private fun routeName(
+        decision: StreamProxyDecision,
+        config: StreamProxyConfig,
+    ): String {
+        return if (
+            decision.action == StreamProxyAction.PROXY &&
+            config.proxyUrls.isNotEmpty()
+        ) {
+            "proxy"
+        } else {
+            "direct"
+        }
     }
 
     private fun sanitizeLogValue(value: String?): String {
@@ -662,11 +1154,262 @@ class CastRelayServer(
     private data class RelayTarget(
         val sourceUrl: String,
         val selectedQuality: String?,
+        val kind: RelayTargetKind,
+        val createdMs: Long,
+        val lastAccessMs: Long,
+    ) {
+        fun isExpired(nowMs: Long, mediaTargetTtlMs: Long): Boolean {
+            return kind == RelayTargetKind.MEDIA &&
+                mediaTargetTtlMs >= 0L &&
+                lastAccessMs < nowMs - mediaTargetTtlMs
+        }
+    }
+
+    private enum class RelayTargetKind {
+        PLAYLIST,
+        MEDIA,
+    }
+
+    private data class RefreshedResponse(
+        val upstreamUrl: String,
+        val response: StreamProxyResponse,
     )
 
     private data class TimedBody(
         val bytes: ByteArray,
         val firstByteNs: Long?,
+    )
+
+    private data class CachedSegmentResponse(
+        val statusCode: Int,
+        val reasonPhrase: String,
+        val headers: Map<String, String>,
+        val bytes: ByteArray,
+        val mimeType: String?,
+        val fetchStartedNs: Long,
+        val upstreamConnectedNs: Long,
+        val upstreamFirstByteNs: Long?,
+        val upstreamReadCompleteNs: Long,
+        val route: String,
+    )
+
+    private data class SegmentCacheAcquire(
+        val future: CompletableFuture<CachedSegmentResponse>,
+        val cacheHit: Boolean,
+        val startedByPrefetch: Boolean,
+        val fetchStartedNs: Long,
+    )
+
+    private class RestartableSegmentExecutor(
+        private val threadCount: Int,
+    ) {
+        private val lock = Any()
+
+        @Volatile
+        private var executor: ExecutorService = newExecutor()
+
+        fun execute(command: Runnable) {
+            var lastError: RejectedExecutionException? = null
+
+            repeat(2) {
+                val activeExecutor = synchronized(lock) {
+                    if (executor.isShutdown || executor.isTerminated) {
+                        executor = newExecutor()
+                    }
+                    executor
+                }
+
+                try {
+                    activeExecutor.execute(command)
+                    return
+                } catch (error: RejectedExecutionException) {
+                    lastError = error
+                    synchronized(lock) {
+                        if (executor === activeExecutor) {
+                            executor = newExecutor()
+                        }
+                    }
+                }
+            }
+
+            throw lastError ?: RejectedExecutionException("Segment executor rejected task")
+        }
+
+        fun shutdownNow() {
+            synchronized(lock) {
+                executor.shutdownNow()
+            }
+        }
+
+        private fun newExecutor(): ExecutorService {
+            return Executors.newFixedThreadPool(threadCount) { runnable ->
+                Thread(runnable).apply {
+                    isDaemon = true
+                    name = "GlacierCastSegmentFetch"
+                }
+            }
+        }
+    }
+
+    private class SegmentMemoryCache(
+        private val nowMs: () -> Long,
+        private val ttlMs: Long,
+        maxEntries: Int,
+        maxBytes: Long,
+        private val executor: RestartableSegmentExecutor,
+    ) {
+        private val lock = Any()
+        private val maxEntries = maxEntries.coerceAtLeast(0)
+        private val maxBytes = maxBytes.coerceAtLeast(0L)
+        private val entries = LinkedHashMap<String, SegmentCacheEntry>(
+            16,
+            0.75f,
+            true,
+        )
+        private var currentBytes = 0L
+
+        fun getOrStart(
+            key: String,
+            prefetch: Boolean,
+            fetch: () -> CachedSegmentResponse,
+        ): SegmentCacheAcquire {
+            var entryToStart: SegmentCacheEntry? = null
+            val acquire = synchronized(lock) {
+                evictLocked(nowMs())
+                val existing = entries[key]
+                if (existing != null) {
+                    existing.lastAccessMs = nowMs()
+                    return@synchronized SegmentCacheAcquire(
+                        future = existing.future,
+                        cacheHit = existing.completedAtMs != null,
+                        startedByPrefetch = existing.startedByPrefetch,
+                        fetchStartedNs = existing.fetchStartedNs,
+                    )
+                }
+
+                val entry = SegmentCacheEntry(
+                    future = CompletableFuture(),
+                    createdMs = nowMs(),
+                    lastAccessMs = nowMs(),
+                    fetchStartedNs = System.nanoTime(),
+                    startedByPrefetch = prefetch,
+                )
+                entries[key] = entry
+                entryToStart = entry
+                SegmentCacheAcquire(
+                    future = entry.future,
+                    cacheHit = false,
+                    startedByPrefetch = prefetch,
+                    fetchStartedNs = entry.fetchStartedNs,
+                )
+            }
+
+            val newEntry = entryToStart
+            if (newEntry != null) {
+                try {
+                    executor.execute {
+                        try {
+                            val response = fetch()
+                            newEntry.future.complete(response)
+                            completeFetch(key, newEntry, response)
+                        } catch (error: Throwable) {
+                            newEntry.future.completeExceptionally(error)
+                            removeEntry(key, newEntry)
+                        }
+                    }
+                } catch (error: RejectedExecutionException) {
+                    newEntry.future.completeExceptionally(error)
+                    removeEntry(key, newEntry)
+                    throw error
+                }
+            }
+
+            return acquire
+        }
+
+        fun clear() {
+            synchronized(lock) {
+                entries.clear()
+                currentBytes = 0L
+            }
+        }
+
+        private fun completeFetch(
+            key: String,
+            entry: SegmentCacheEntry,
+            response: CachedSegmentResponse,
+        ) {
+            synchronized(lock) {
+                if (entries[key] !== entry) return
+
+                val responseBytes = response.bytes.size.toLong()
+                if (
+                    response.statusCode !in 200..299 ||
+                    responseBytes > maxBytes ||
+                    maxEntries == 0 ||
+                    maxBytes == 0L
+                ) {
+                    entries.remove(key)
+                    return
+                }
+
+                entry.completedAtMs = nowMs()
+                entry.completedBytes = responseBytes
+                currentBytes += responseBytes
+                evictLocked(nowMs())
+            }
+        }
+
+        private fun removeEntry(key: String, entry: SegmentCacheEntry) {
+            synchronized(lock) {
+                if (entries[key] === entry) {
+                    entries.remove(key)
+                    currentBytes = (currentBytes - entry.completedBytes).coerceAtLeast(0L)
+                }
+            }
+        }
+
+        private fun evictLocked(now: Long) {
+            if (ttlMs >= 0L) {
+                val ttlCutoff = now - ttlMs
+                val iterator = entries.entries.iterator()
+                while (iterator.hasNext()) {
+                    val entry = iterator.next().value
+                    if (entry.completedAtMs != null && entry.lastAccessMs < ttlCutoff) {
+                        currentBytes = (currentBytes - entry.completedBytes).coerceAtLeast(0L)
+                        iterator.remove()
+                    }
+                }
+            }
+
+            while (entries.size > maxEntries || currentBytes > maxBytes) {
+                if (!removeOldestCompletedLocked()) break
+            }
+        }
+
+        private fun removeOldestCompletedLocked(): Boolean {
+            val iterator = entries.entries.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next().value
+                if (entry.completedAtMs == null) continue
+
+                currentBytes = (currentBytes - entry.completedBytes).coerceAtLeast(0L)
+                iterator.remove()
+                return true
+            }
+
+            return false
+        }
+    }
+
+    private class SegmentCacheEntry(
+        val future: CompletableFuture<CachedSegmentResponse>,
+        val createdMs: Long,
+        var lastAccessMs: Long,
+        val fetchStartedNs: Long,
+        val startedByPrefetch: Boolean,
+        var completedAtMs: Long? = null,
+        var completedBytes: Long = 0L,
     )
 
     private data class StreamResult(
@@ -676,14 +1419,23 @@ class CastRelayServer(
 
     private data class PlaylistLiveEdgeMetadata(
         val mediaSequence: String? = null,
+        val discontinuitySequence: String? = null,
         val programDateTime: String? = null,
         val targetDuration: String? = null,
+        val segmentCount: Int = 0,
     )
 
     private companion object {
         private const val SERVER_BACKLOG = 32
         private const val STREAM_BUFFER_SIZE = 64 * 1024
         private const val MAX_LOG_VALUE_LENGTH = 240
+        private const val DEFAULT_MEDIA_TARGET_TTL_MS = 2 * 60 * 1000L
+        private const val DEFAULT_MAX_MEDIA_TARGETS = 512
+        private const val DEFAULT_MAX_PLAYLIST_TARGETS = 96
+        private const val DEFAULT_SEGMENT_CACHE_TTL_MS = 2 * 60 * 1000L
+        private const val DEFAULT_MAX_SEGMENT_CACHE_ENTRIES = 6
+        private const val DEFAULT_MAX_SEGMENT_CACHE_BYTES = 24L * 1024L * 1024L
+        private const val SEGMENT_FETCH_THREADS = 3
 
         private val hopByHopHeaders = setOf(
             "connection",
@@ -698,6 +1450,35 @@ class CastRelayServer(
             "upgrade",
         )
     }
+}
+
+internal fun relayRequestFailedLogLine(
+    method: String?,
+    path: String?,
+    totalMs: Long,
+    reason: String,
+    clientAborted: Boolean,
+): String {
+    return "cast_relay action=request_failed " +
+        "method=${sanitizeRelayFailureValue(method)} " +
+        "path=${sanitizeRelayFailureValue(path)} " +
+        "total_ms=$totalMs " +
+        "reason=${sanitizeRelayFailureValue(reason)} " +
+        "client_aborted=$clientAborted"
+}
+
+private fun isLikelyClientAbort(error: Exception): Boolean {
+    val reason = error.javaClass.simpleName
+    return error is java.net.SocketException ||
+        reason.contains("ConnectionReset", ignoreCase = true) ||
+        reason.contains("BrokenPipe", ignoreCase = true)
+}
+
+private fun sanitizeRelayFailureValue(value: String?): String {
+    return value
+        ?.replace(Regex("\\s+"), "_")
+        ?.take(160)
+        .orEmpty()
 }
 
 internal object CastRelayLanAddressSelector {

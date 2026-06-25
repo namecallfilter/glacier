@@ -18,8 +18,10 @@ import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 class CastRelayServerTest {
     @Test
@@ -108,7 +110,7 @@ class CastRelayServerTest {
     }
 
     @Test
-    fun streamsMediaResponsesBeforeUpstreamBodyCompletes() {
+    fun downloadsMediaResponsesBeforeWritingDownstream() {
         val firstChunkWritten = CountDownLatch(1)
         val releaseRest = CountDownLatch(1)
 
@@ -145,23 +147,37 @@ class CastRelayServerTest {
                     socket.getOutputStream().flush()
 
                     assertTrue(firstChunkWritten.await(2, TimeUnit.SECONDS))
+                    val input = socket.getInputStream().buffered()
 
                     try {
-                        val input = socket.getInputStream().buffered()
+                        var timedOutBeforeUpstreamComplete = false
+                        try {
+                            readAsciiLine(input)
+                        } catch (_: SocketTimeoutException) {
+                            timedOutBeforeUpstreamComplete = true
+                        }
+                        assertTrue(
+                            "relay wrote downstream before the upstream segment completed",
+                            timedOutBeforeUpstreamComplete,
+                        )
+                    } finally {
+                        releaseRest.countDown()
+                    }
+
+                    try {
+                        socket.soTimeout = 2000
                         assertEquals("HTTP/1.1 200 OK", readAsciiLine(input))
                         val headers = readHeaders(input)
                         assertEquals("6", header(headers, "Content-Length"))
 
-                        val firstChunk = ByteArray(3)
-                        readFully(input, firstChunk)
-                        assertEquals("abc", firstChunk.toString(StandardCharsets.ISO_8859_1))
+                        val body = ByteArray(6)
+                        readFully(input, body)
+                        assertEquals("abcdef", body.toString(StandardCharsets.ISO_8859_1))
                     } catch (error: SocketTimeoutException) {
                         throw AssertionError(
-                            "relay buffered the media body instead of sending response headers",
+                            "relay did not serve the cached media body after upstream completion",
                             error,
                         )
-                    } finally {
-                        releaseRest.countDown()
                     }
                 }
             }
@@ -187,6 +203,12 @@ class CastRelayServerTest {
                 val response = get(relayUrl)
 
                 assertEquals("segment", response.body)
+                waitUntil {
+                    logs.any { log ->
+                        log.contains("cast_relay action=response") &&
+                            log.contains("playlist=false")
+                    }
+                }
                 val responseLog = logs.firstOrNull { log ->
                     log.contains("cast_relay action=response") &&
                         log.contains("playlist=false")
@@ -194,9 +216,232 @@ class CastRelayServerTest {
 
                 assertTrue(responseLog.contains("upstream_connect_ms="))
                 assertTrue(responseLog.contains("upstream_first_byte_ms="))
+                assertTrue(responseLog.contains("upstream_read_complete_ms="))
+                assertTrue(responseLog.contains("downstream_write_complete_ms="))
+                assertTrue(responseLog.contains("upstream_mbps="))
+                assertTrue(responseLog.contains("downstream_mbps="))
+                assertTrue(responseLog.contains("cache_hit="))
+                assertTrue(responseLog.contains("cache_wait_ms="))
+                assertTrue(responseLog.contains("prefetch_lead_ms="))
+                assertTrue(responseLog.contains("route=direct"))
                 assertTrue(responseLog.contains("total_ms="))
                 assertTrue(responseLog.contains("bytes=7"))
                 assertTrue(responseLog.contains("playlist=false"))
+            }
+        }
+    }
+
+    @Test
+    fun prefetchesNewlyPublishedSegmentsWhenMediaPlaylistIsRewritten() {
+        val logs = mutableListOf<String>()
+
+        RawUpstreamServer { request, output ->
+            when {
+                request.target.endsWith(".m3u8") -> writeHttpResponse(
+                    output = output,
+                    contentType = "application/vnd.apple.mpegurl",
+                    body = """
+                        #EXTM3U
+                        #EXT-X-TARGETDURATION:2
+                        #EXTINF:2.000,
+                        segment-1.ts
+                    """.trimIndent(),
+                )
+                request.target.endsWith(".ts") -> writeHttpResponse(
+                    output = output,
+                    contentType = "video/mp2t",
+                    body = "segment-1",
+                )
+                else -> writeHttpResponse(output, "text/plain", "unexpected")
+            }
+        }.use { upstream ->
+            CastRelayServer(log = logs::add).use { relay ->
+                val playlistRelayUrl = localRelayUrl(
+                    relay.relayUrlFor(upstream.url("/live/index.m3u8")),
+                )
+
+                val playlist = get(playlistRelayUrl)
+                val playlistRequest = upstream.takeRequest()
+                val prefetchRequest = upstream.takeRequest()
+                val segmentRelayUrl = relayUrlsIn(playlist.body).single()
+
+                val segment = get(localRelayUrl(segmentRelayUrl))
+
+                assertEquals("/live/index.m3u8", URI("http://upstream${playlistRequest.target}").path)
+                assertEquals("/live/segment-1.ts", URI("http://upstream${prefetchRequest.target}").path)
+                assertEquals("segment-1", segment.body)
+                assertTrue(
+                    logs.any { log ->
+                        log.contains("cast_relay action=response") &&
+                            log.contains("playlist=false") &&
+                            log.contains("prefetch_lead_ms=")
+                    },
+                )
+            }
+        }
+    }
+
+    @Test
+    fun prefetchesAfterRelayIsClosedAndStartedAgain() {
+        val logs = mutableListOf<String>()
+
+        RawUpstreamServer { request, output ->
+            when {
+                request.target.endsWith(".m3u8") -> writeHttpResponse(
+                    output = output,
+                    contentType = "application/vnd.apple.mpegurl",
+                    body = """
+                        #EXTM3U
+                        #EXT-X-TARGETDURATION:2
+                        #EXTINF:2.000,
+                        segment-after-restart.ts
+                    """.trimIndent(),
+                )
+                request.target.endsWith(".ts") -> writeHttpResponse(
+                    output = output,
+                    contentType = "video/mp2t",
+                    body = "segment-after-restart",
+                )
+                else -> writeHttpResponse(output, "text/plain", "unexpected")
+            }
+        }.use { upstream ->
+            CastRelayServer(log = logs::add).use { relay ->
+                relay.relayUrlFor(upstream.url("/warmup/index.m3u8"))
+                relay.close()
+
+                val playlistRelayUrl = localRelayUrl(
+                    relay.relayUrlFor(upstream.url("/live/index.m3u8")),
+                )
+
+                val playlist = get(playlistRelayUrl)
+                val playlistRequest = upstream.takeRequest()
+                val prefetchRequest = upstream.takeRequest()
+
+                assertEquals(200, playlist.statusCode)
+                assertTrue(playlist.body.contains("/relay/"))
+                assertEquals("/live/index.m3u8", URI("http://upstream${playlistRequest.target}").path)
+                assertEquals(
+                    "/live/segment-after-restart.ts",
+                    URI("http://upstream${prefetchRequest.target}").path,
+                )
+                assertFalse(
+                    logs.any { log -> log.contains("RejectedExecutionException") },
+                )
+            }
+        }
+    }
+
+    @Test
+    fun servesCompletedSegmentCacheHitsWithoutSecondUpstreamFetch() {
+        val logs = mutableListOf<String>()
+        val requestCount = AtomicInteger(0)
+
+        RawUpstreamServer { _, output ->
+            requestCount.incrementAndGet()
+            writeHttpResponse(
+                output = output,
+                contentType = "video/mp2t",
+                body = "segment",
+            )
+        }.use { upstream ->
+            CastRelayServer(log = logs::add).use { relay ->
+                val segmentRelayUrl = localRelayUrl(
+                    relay.relayUrlFor(upstream.url("/segment.ts")),
+                )
+
+                assertEquals("segment", get(segmentRelayUrl).body)
+                assertEquals("segment", get(segmentRelayUrl).body)
+
+                assertEquals(1, requestCount.get())
+                assertTrue(
+                    logs.any { log ->
+                        log.contains("playlist=false") &&
+                            log.contains("cache_hit=true") &&
+                            log.contains("cache_wait_ms=0")
+                    },
+                )
+            }
+        }
+    }
+
+    @Test
+    fun deduplicatesConcurrentSegmentFetches() {
+        val requestCount = AtomicInteger(0)
+        val upstreamRequestStarted = CountDownLatch(1)
+        val releaseUpstream = CountDownLatch(1)
+
+        RawUpstreamServer { _, output ->
+            requestCount.incrementAndGet()
+            upstreamRequestStarted.countDown()
+            assertTrue(releaseUpstream.await(3, TimeUnit.SECONDS))
+            writeHttpResponse(
+                output = output,
+                contentType = "video/mp2t",
+                body = "segment",
+            )
+        }.use { upstream ->
+            CastRelayServer(log = {}).use { relay ->
+                val segmentRelayUrl = localRelayUrl(
+                    relay.relayUrlFor(upstream.url("/segment.ts")),
+                )
+                val startRequests = CountDownLatch(1)
+                val responses = LinkedBlockingQueue<RelayResponse>()
+
+                repeat(2) {
+                    Thread {
+                        startRequests.await()
+                        responses += get(segmentRelayUrl)
+                    }.apply {
+                        isDaemon = true
+                        start()
+                    }
+                }
+
+                startRequests.countDown()
+                assertTrue(upstreamRequestStarted.await(2, TimeUnit.SECONDS))
+                waitUntil { requestCount.get() == 1 }
+                releaseUpstream.countDown()
+
+                val first = responses.poll(2, TimeUnit.SECONDS)
+                    ?: error("missing first response")
+                val second = responses.poll(2, TimeUnit.SECONDS)
+                    ?: error("missing second response")
+
+                assertEquals("segment", first.body)
+                assertEquals("segment", second.body)
+                assertEquals(1, requestCount.get())
+            }
+        }
+    }
+
+    @Test
+    fun evictsCompletedSegmentCacheEntriesByMemoryLimit() {
+        val requestCounts = ConcurrentHashMap<String, AtomicInteger>()
+
+        RawUpstreamServer { request, output ->
+            requestCounts
+                .computeIfAbsent(request.target) { AtomicInteger(0) }
+                .incrementAndGet()
+            writeHttpResponse(
+                output = output,
+                contentType = "video/mp2t",
+                body = request.target.substringAfter("/").padEnd(10, '-').take(10),
+            )
+        }.use { upstream ->
+            CastRelayServer(
+                log = {},
+                maxSegmentCacheBytes = 15L,
+                maxSegmentCacheEntries = 6,
+            ).use { relay ->
+                val firstSegment = localRelayUrl(relay.relayUrlFor(upstream.url("/a.ts")))
+                val secondSegment = localRelayUrl(relay.relayUrlFor(upstream.url("/b.ts")))
+
+                get(firstSegment)
+                get(secondSegment)
+                get(firstSegment)
+
+                assertEquals(2, requestCounts["/a.ts"]?.get())
+                assertEquals(1, requestCounts["/b.ts"]?.get())
             }
         }
     }
@@ -286,6 +531,147 @@ class CastRelayServerTest {
         }
     }
 
+    @Test
+    fun expiresOldMediaTargetsButKeepsPlaylistTargetsAvailable() {
+        var nowMs = 1_000L
+
+        RawUpstreamServer { request, output ->
+            if (request.target.endsWith(".m3u8")) {
+                writeHttpResponse(
+                    output = output,
+                    contentType = "application/vnd.apple.mpegurl",
+                    body = """
+                        #EXTM3U
+                        #EXT-X-TARGETDURATION:2
+                    """.trimIndent(),
+                )
+            } else {
+                writeHttpResponse(
+                    output = output,
+                    contentType = "video/mp2t",
+                    body = "segment",
+                )
+            }
+        }.use { upstream ->
+            CastRelayServer(
+                log = {},
+                nowMs = { nowMs },
+                mediaTargetTtlMs = 1_000L,
+                maxMediaTargets = 4,
+            ).use { relay ->
+                val playlistRelayUrl = localRelayUrl(
+                    relay.relayUrlFor(upstream.url("/live/index.m3u8")),
+                )
+                val firstSegmentRelayUrl = localRelayUrl(
+                    relay.relayUrlFor(upstream.url("/segment-a.ts")),
+                )
+
+                nowMs += 1_001L
+                relay.relayUrlFor(upstream.url("/segment-b.ts"))
+
+                val expiredSegment = get(firstSegmentRelayUrl)
+                val playlist = get(playlistRelayUrl)
+
+                assertEquals(404, expiredSegment.statusCode)
+                assertEquals(200, playlist.statusCode)
+                assertTrue(playlist.body.contains("#EXTM3U"))
+            }
+        }
+    }
+
+    @Test
+    fun relayUrlsUseDeterministicIdsForEquivalentTargets() {
+        CastRelayServer(log = {}).use { relay ->
+            val sourceUrl = "https://video-weaver.example.hls.ttvnw.net/v1/segment-a.ts?token=abc"
+
+            assertEquals(
+                relay.relayUrlFor(sourceUrl),
+                relay.relayUrlFor(sourceUrl),
+            )
+        }
+    }
+
+    @Test
+    fun refreshesStalePlaylistFromLatestRememberedManifestUrl() {
+        val logs = mutableListOf<String>()
+        val router = StreamProxyRequestRouter()
+
+        RawUpstreamServer { request, output ->
+            when {
+                request.target.startsWith("/old/index.m3u8") -> writeHttpResponse(
+                    output = output,
+                    statusCode = 403,
+                    reasonPhrase = "Forbidden",
+                    contentType = "text/plain",
+                    body = "expired",
+                )
+                request.target.startsWith("/new/index.m3u8") -> writeHttpResponse(
+                    output = output,
+                    contentType = "application/vnd.apple.mpegurl",
+                    body = """
+                        #EXTM3U
+                        #EXT-X-TARGETDURATION:2
+                        #EXT-X-MEDIA-SEQUENCE:90
+                        #EXTINF:2.000,
+                        segment-new.ts
+                    """.trimIndent(),
+                )
+                else -> writeHttpResponse(
+                    output = output,
+                    contentType = "video/mp2t",
+                    body = "segment",
+                )
+            }
+        }.use { upstream ->
+            val latestManifestUrl = upstream.url("/new/index.m3u8?token=new")
+            router.rememberUsherManifest(
+                channel = "streamer",
+                manifestUrl = latestManifestUrl,
+                manifestBody = "#EXTM3U",
+            )
+
+            CastRelayServer(logs::add).use { relay ->
+                relay.update(
+                    router = router,
+                    config = StreamProxyConfig(
+                        mode = StreamProxyMode.OFF,
+                        currentChannelLogin = "streamer",
+                        proxyUrls = emptyList(),
+                        whitelistedChannels = emptySet(),
+                        debugLogging = false,
+                    ),
+                )
+                val relayUrl = localRelayUrl(
+                    relay.relayUrlFor(upstream.url("/old/index.m3u8?token=old")),
+                )
+
+                val response = get(relayUrl)
+
+                assertEquals(200, response.statusCode)
+                assertTrue(response.body.contains("#EXT-X-MEDIA-SEQUENCE:90"))
+                assertTrue(response.body.contains("/relay/"))
+                assertFalse(response.body.contains("expired"))
+                assertTrue(logs.any { it.contains("cast_relay action=stale_manifest_refresh") })
+            }
+        }
+    }
+
+    @Test
+    fun formatsRequestFailureLogsWithRequestContext() {
+        assertEquals(
+            "cast_relay action=request_failed " +
+                "method=GET path=/relay/segment.ts total_ms=123 " +
+                "reason=SocketException client_aborted=true",
+            relayRequestFailedLogLine(
+                method = "GET",
+                path = "/relay/segment.ts",
+                totalMs = 123,
+                reason = "SocketException",
+                clientAborted = true,
+            ),
+        )
+    }
+
     private fun get(
         url: String,
         headers: Map<String, String> = emptyMap(),
@@ -295,9 +681,13 @@ class CastRelayServerTest {
         connection.readTimeout = 2000
         headers.forEach(connection::setRequestProperty)
 
-        val body = connection.inputStream.use { input ->
-            input.readBytes().toString(StandardCharsets.UTF_8)
+        val statusCode = connection.responseCode
+        val bodyStream = if (statusCode >= 400) {
+            connection.errorStream ?: connection.inputStream
+        } else {
+            connection.inputStream
         }
+        val body = bodyStream.use { input -> input.readBytes().toString(StandardCharsets.UTF_8) }
         val responseHeaders = connection.headerFields
             .mapNotNull { (name, values) ->
                 val value = values?.firstOrNull()
@@ -310,7 +700,7 @@ class CastRelayServerTest {
             .toMap()
         connection.disconnect()
 
-        return RelayResponse(body, responseHeaders)
+        return RelayResponse(statusCode, body, responseHeaders)
     }
 
     private fun localRelayUrl(
@@ -321,7 +711,24 @@ class CastRelayServerTest {
         return "http://127.0.0.1:${uri.port}${uri.rawPath}$query"
     }
 
+    private fun relayUrlsIn(body: String): List<String> {
+        return Regex("""http://[^\s"]+/relay/[^\s"]+""")
+            .findAll(body)
+            .map { match -> match.value }
+            .toList()
+    }
+
+    private fun waitUntil(condition: () -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+        while (System.nanoTime() < deadline) {
+            if (condition()) return
+            Thread.sleep(10)
+        }
+        assertTrue("condition was not met before timeout", condition())
+    }
+
     private data class RelayResponse(
+        val statusCode: Int,
         val body: String,
         val headers: Map<String, String>,
     )
@@ -406,10 +813,16 @@ private fun writeHttpResponse(
     contentType: String,
     body: String,
     headers: Map<String, String> = emptyMap(),
+    statusCode: Int = 200,
+    reasonPhrase: String = "OK",
 ) {
     val bodyBytes = body.toByteArray(StandardCharsets.UTF_8)
     val responseHeaders = buildString {
-        append("HTTP/1.1 200 OK\r\n")
+        append("HTTP/1.1 ")
+        append(statusCode)
+        append(" ")
+        append(reasonPhrase)
+        append("\r\n")
         append("Content-Type: ")
         append(contentType)
         append("\r\n")

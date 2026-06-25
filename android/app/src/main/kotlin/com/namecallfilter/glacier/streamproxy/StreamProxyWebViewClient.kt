@@ -23,6 +23,9 @@ class StreamProxyWebViewClient(
     private var documentStartScript: ScriptHandler? = null
     private var documentStartSupported = false
 
+    @Volatile
+    private var localPlaybackSuspendedForCast = false
+
     fun attachToWebView(view: WebView) {
         webView = view
         installDocumentStartScript()
@@ -40,8 +43,17 @@ class StreamProxyWebViewClient(
     }
 
     fun detachFromWebView() {
+        resumeLocalPlaybackAfterCast()
         removeDocumentStartScript()
         webView = null
+    }
+
+    fun setLocalPlaybackSuspendedForCast(suspended: Boolean) {
+        if (suspended) {
+            suspendLocalPlaybackForCast()
+        } else {
+            resumeLocalPlaybackAfterCast()
+        }
     }
 
     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
@@ -178,6 +190,61 @@ class StreamProxyWebViewClient(
             log("page_hook action=remove_failed reason=${error.javaClass.simpleName}")
         } finally {
             documentStartScript = null
+        }
+    }
+
+    private fun suspendLocalPlaybackForCast() {
+        val view = webView ?: run {
+            log("local_webview action=suspend_for_cast result=missing_webview")
+            return
+        }
+        if (localPlaybackSuspendedForCast) return
+
+        localPlaybackSuspendedForCast = true
+        view.post {
+            runCatching {
+                view.evaluateJavascript(
+                    "(window._videoEl || document.getElementsByTagName('video')[0])?.pause();",
+                    null,
+                )
+            }.onFailure { error ->
+                log(
+                    "local_webview action=pause_for_cast_failed " +
+                        "reason=${error.javaClass.simpleName}",
+                )
+            }
+            runCatching {
+                view.onPause()
+                log("local_webview action=suspend_for_cast result=ok")
+            }.onFailure { error ->
+                log(
+                    "local_webview action=suspend_for_cast result=failed " +
+                        "reason=${error.javaClass.simpleName}",
+                )
+            }
+        }
+    }
+
+    private fun resumeLocalPlaybackAfterCast() {
+        val view = webView
+        if (!localPlaybackSuspendedForCast) return
+
+        localPlaybackSuspendedForCast = false
+        if (view == null) {
+            log("local_webview action=resume_after_cast result=missing_webview")
+            return
+        }
+
+        view.post {
+            runCatching {
+                view.onResume()
+                log("local_webview action=resume_after_cast result=ok")
+            }.onFailure { error ->
+                log(
+                    "local_webview action=resume_after_cast result=failed " +
+                        "reason=${error.javaClass.simpleName}",
+                )
+            }
         }
     }
 

@@ -11,6 +11,7 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 import com.namecallfilter.glacier.R
 
 class CastRelayKeepAliveService : Service() {
@@ -20,6 +21,11 @@ class CastRelayKeepAliveService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(
+            LOG_TAG,
+            "cast_keep_alive action=start_command " +
+                "intent_action=${intent?.action.orEmpty()} start_id=$startId flags=$flags",
+        )
         if (intent?.action == ACTION_STOP) {
             stopSelf()
             return START_NOT_STICKY
@@ -31,8 +37,18 @@ class CastRelayKeepAliveService : Service() {
     }
 
     override fun onDestroy() {
+        Log.d(LOG_TAG, "cast_keep_alive action=destroy")
         releaseLocks()
         super.onDestroy()
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        Log.d(
+            LOG_TAG,
+            "cast_keep_alive action=timeout start_id=$startId fgs_type=$fgsType",
+        )
+        releaseLocks()
+        stopSelf(startId)
     }
 
     private fun startForegroundCompat() {
@@ -45,8 +61,10 @@ class CastRelayKeepAliveService : Service() {
                 notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
             )
+            Log.d(LOG_TAG, "cast_keep_alive action=foreground_started type=dataSync")
         } else {
             startForeground(NOTIFICATION_ID, notification)
+            Log.d(LOG_TAG, "cast_keep_alive action=foreground_started type=legacy")
         }
     }
 
@@ -86,12 +104,21 @@ class CastRelayKeepAliveService : Service() {
     private fun acquireLocks() {
         val powerManager = getSystemService(POWER_SERVICE) as PowerManager
         if (wakeLock?.isHeld != true) {
-            wakeLock = powerManager
-                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Glacier:CastRelayWakeLock")
-                .apply {
-                    setReferenceCounted(false)
-                    acquire()
-                }
+            runCatching {
+                wakeLock = powerManager
+                    .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Glacier:CastRelayWakeLock")
+                    .apply {
+                        setReferenceCounted(false)
+                        acquire()
+                    }
+                Log.d(LOG_TAG, "cast_keep_alive action=wake_lock_acquired")
+            }.onFailure { error ->
+                Log.d(
+                    LOG_TAG,
+                    "cast_keep_alive action=wake_lock_failed " +
+                        "reason=${error.javaClass.simpleName}",
+                )
+            }
         }
 
         val wifiManager = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
@@ -102,28 +129,47 @@ class CastRelayKeepAliveService : Service() {
                 @Suppress("DEPRECATION")
                 WifiManager.WIFI_MODE_FULL_HIGH_PERF
             }
-            wifiLock = wifiManager
-                .createWifiLock(mode, "Glacier:CastRelayWifiLock")
-                .apply {
-                    setReferenceCounted(false)
-                    acquire()
-                }
+            runCatching {
+                wifiLock = wifiManager
+                    .createWifiLock(mode, "Glacier:CastRelayWifiLock")
+                    .apply {
+                        setReferenceCounted(false)
+                        acquire()
+                    }
+                Log.d(
+                    LOG_TAG,
+                    "cast_keep_alive action=wifi_lock_acquired mode=$mode",
+                )
+            }.onFailure { error ->
+                Log.d(
+                    LOG_TAG,
+                    "cast_keep_alive action=wifi_lock_failed " +
+                        "reason=${error.javaClass.simpleName}",
+                )
+            }
         }
     }
 
     private fun releaseLocks() {
         wakeLock
             ?.takeIf(PowerManager.WakeLock::isHeld)
-            ?.release()
+            ?.also {
+                it.release()
+                Log.d(LOG_TAG, "cast_keep_alive action=wake_lock_released")
+            }
         wakeLock = null
 
         wifiLock
             ?.takeIf(WifiManager.WifiLock::isHeld)
-            ?.release()
+            ?.also {
+                it.release()
+                Log.d(LOG_TAG, "cast_keep_alive action=wifi_lock_released")
+            }
         wifiLock = null
     }
 
     companion object {
+        private const val LOG_TAG = "GlacierCast"
         private const val ACTION_START = "com.namecallfilter.glacier.cast.START_RELAY_KEEP_ALIVE"
         private const val ACTION_STOP = "com.namecallfilter.glacier.cast.STOP_RELAY_KEEP_ALIVE"
         private const val CHANNEL_ID = "glacier_cast_relay"

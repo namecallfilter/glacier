@@ -23,67 +23,136 @@
 
 	<script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
 	<script>
+		window.GlacierReceiverLogic = (() => {
+			const finiteNumber = (value) =>
+				typeof value === 'number' && Number.isFinite(value);
+
+			return {
+				finiteNumber,
+			};
+		})();
+	</script>
+	<script>
 		(() => {
 			const MESSAGE_NAMESPACE = 'urn:x-cast:com.namecallfilter.glacier.cast';
-			const STATUS_INTERVAL_MS = 1000;
-			const TARGET_LATENCY_SECONDS = 2.5;
-			const MAX_LATENCY_SECONDS = 5;
+			const RECEIVER_VERSION = '2026-06-24-2';
+			const STATUS_INTERVAL_MS = 500;
+			const TARGET_LATENCY_SECONDS = 2.25;
+			const MAX_DYNAMIC_LATENCY_SECONDS = 5.0;
+			const MANIFEST_RELOAD_COOLDOWN_MS = 5000;
+			const logic = window.GlacierReceiverLogic;
 
-			const retryParameters = {
-				maxAttempts: 4,
-				baseDelay: 1000,
-				backoffFactor: 1.5,
-				fuzzFactor: 0.1,
+			const MANIFEST_REQUEST_TIMEOUT_MS = 2500;
+			const SEGMENT_REQUEST_TIMEOUT_MS = 4500;
+
+			const manifestRetryParameters = {
+				maxAttempts: 2,
+				baseDelay: 250,
+				backoffFactor: 1.4,
+				fuzzFactor: 0.05,
+				timeout: MANIFEST_REQUEST_TIMEOUT_MS,
+				stallTimeout: 1500,
+				connectionTimeout: 1500,
+			};
+
+			const segmentRetryParameters = {
+				maxAttempts: 2,
+				baseDelay: 250,
+				backoffFactor: 1.4,
+				fuzzFactor: 0.05,
+				timeout: SEGMENT_REQUEST_TIMEOUT_MS,
+				stallTimeout: 3000,
+				connectionTimeout: 1500,
 			};
 
 			const playbackConfig = new cast.framework.PlaybackConfig();
-			playbackConfig.autoResumeNumberOfSegments = 0;
-			playbackConfig.enableSmoothLiveRefresh = false;
-			playbackConfig.segmentRequestRetryLimit = 2;
+			playbackConfig.autoResumeNumberOfSegments = 1;
 			playbackConfig.shakaConfig = {
 				streaming: {
 					lowLatencyMode: true,
 					bufferingGoal: 4,
-					rebufferingGoal: 1,
+					rebufferingGoal: 2.5,
 					bufferBehind: 6,
 					updateIntervalSeconds: 0.5,
-					segmentPrefetchLimit: 1,
-					inaccurateManifestTolerance: 1,
-					startAtSegmentBoundary: false,
+					segmentPrefetchLimit: 2,
 					liveSync: {
 						enabled: true,
 						targetLatency: TARGET_LATENCY_SECONDS,
-						targetLatencyTolerance: 1,
-						maxPlaybackRate: 1.08,
-						minPlaybackRate: 0.98,
-						panicMode: true,
-						panicThreshold: MAX_LATENCY_SECONDS,
+						targetLatencyTolerance: 0.15,
+						maxPlaybackRate: 1.01,
+						minPlaybackRate: 0.97,
+						panicMode: false,
 						dynamicTargetLatency: {
 							enabled: true,
 							minLatency: TARGET_LATENCY_SECONDS,
-							maxLatency: MAX_LATENCY_SECONDS,
-							rebufferIncrement: 1,
-							stabilityThreshold: 8,
-							maxAttempts: 3,
+							maxLatency: MAX_DYNAMIC_LATENCY_SECONDS,
+							rebufferIncrement: 0.25,
+							stabilityThreshold: 6,
+							maxAttempts: 2,
 						},
 					},
-					retryParameters,
+					retryParameters: segmentRetryParameters,
 				},
 				manifest: {
+					availabilityWindowOverride: 30,
 					defaultPresentationDelay: TARGET_LATENCY_SECONDS,
 					updatePeriod: 0.5,
-					retryParameters,
-					hls: {
-						ignoreTextStreamFailures: true,
-					},
+					retryParameters: manifestRetryParameters,
 				},
 			};
 
 			const context = cast.framework.CastReceiverContext.getInstance();
 			const playerManager = context.getPlayerManager();
+			let lastManifestReloadMs = -Infinity;
+			let receiverBuffering = null;
+			let bufferingChangedAtMs = null;
 
-			const finiteNumber = (value) =>
-				typeof value === 'number' && Number.isFinite(value);
+			const finiteNumber = logic.finiteNumber;
+
+			const sanitizeLogValue = (value) => {
+				if (value === null || value === undefined) return '';
+				return String(value).replace(/\s+/g, '_').slice(0, 160);
+			};
+
+			const sendCustomMessage = (message, senderId = null) => {
+				const send = (id) => {
+					try {
+						context.sendCustomMessage(MESSAGE_NAMESPACE, id, message);
+					} catch (_) { }
+				};
+
+				if (senderId) {
+					send(senderId);
+					return;
+				}
+
+				const senders = typeof context.getSenders === 'function'
+					? context.getSenders()
+					: [];
+
+				for (const sender of senders) {
+					if (sender && sender.id) send(sender.id);
+				}
+			};
+
+			const sendDiagnostic = (action, fields = {}) => {
+				sendCustomMessage({
+					type: 'diagnostic',
+					action: action,
+					receiverVersion: RECEIVER_VERSION,
+					...fields,
+				});
+			};
+
+			const logDiagnostic = (action, fields = {}) => {
+				const serializedFields = Object.entries(fields)
+					.map(([key, value]) => `${key}=${sanitizeLogValue(value)}`)
+					.join(' ');
+				console.log(
+					`glacier_cast action=${action}${serializedFields ? ` ${serializedFields}` : ''}`,
+				);
+				sendDiagnostic(action, fields);
+			};
 
 			const mediaTimeForNow = () => {
 				if (typeof playerManager.getMediaTimeForAbsoluteTime === 'function') {
@@ -120,6 +189,7 @@
 
 				const seekableLatency = Math.max(0, range.end - currentTime);
 				const liveNow = mediaTimeForNow();
+				const liveEdgeTime = liveNow ? liveNow.mediaTime : range.end;
 				const latency = liveNow
 					? Math.max(0, liveNow.mediaTime - currentTime)
 					: seekableLatency;
@@ -128,12 +198,72 @@
 					currentTime,
 					rangeStart: finiteNumber(range.start) ? range.start : null,
 					rangeEnd: range.end,
+					liveEdgeTime,
 					latency,
 					seekableLatency,
 					latencyReference: liveNow
 						? liveNow.reference
 						: 'liveSeekableRange',
 				};
+			};
+
+			const playbackState = () => {
+				if (typeof playerManager.getPlayerState === 'function') {
+					return playerManager.getPlayerState();
+				}
+				if (typeof playerManager.getPlaybackState === 'function') {
+					return playerManager.getPlaybackState();
+				}
+				return null;
+			};
+
+			const playbackRate = () => {
+				if (typeof playerManager.getPlaybackRate !== 'function') return null;
+				const rate = playerManager.getPlaybackRate();
+				return finiteNumber(rate) ? rate : null;
+			};
+
+			const roundedStat = (value) => {
+				if (!finiteNumber(value)) return null;
+				return Math.round(value * 1000) / 1000;
+			};
+
+			const shakaStatsSummary = () => {
+				if (typeof playerManager.getStats !== 'function') return null;
+
+				try {
+					const stats = playerManager.getStats();
+					if (!stats) return null;
+
+					return {
+						estimated_bandwidth: roundedStat(stats.estimatedBandwidth),
+						stream_bandwidth: roundedStat(stats.streamBandwidth),
+						decoded_frames: roundedStat(stats.decodedFrames),
+						dropped_frames: roundedStat(stats.droppedFrames),
+						play_time: roundedStat(stats.playTime),
+						buffering_time: roundedStat(stats.bufferingTime),
+						load_latency: roundedStat(stats.loadLatency),
+					};
+				} catch (error) {
+					return {
+						error: error && error.message ? error.message : String(error),
+					};
+				}
+			};
+
+			const logShakaStats = () => {
+				const stats = shakaStatsSummary();
+				if (!stats) return;
+
+				logDiagnostic('shaka_stats', {
+					buffering: receiverBuffering,
+					...stats,
+				});
+			};
+
+			const bufferingAgeMs = () => {
+				if (receiverBuffering !== true || !finiteNumber(bufferingChangedAtMs)) return null;
+				return Math.max(0, Date.now() - bufferingChangedAtMs);
 			};
 
 			const statusMessage = () => {
@@ -146,35 +276,76 @@
 					currentTimeSec: status ? status.currentTime : null,
 					rangeStartSec: status ? status.rangeStart : null,
 					rangeEndSec: status ? status.rangeEnd : null,
+					liveEdgeTimeSec: status ? status.liveEdgeTime : null,
 					targetLatencySec: TARGET_LATENCY_SECONDS,
-					maxLatencySec: MAX_LATENCY_SECONDS,
+					maxLatencySec: MAX_DYNAMIC_LATENCY_SECONDS,
 					latencyReference: status ? status.latencyReference : null,
+					buffering: receiverBuffering,
+					bufferingAgeMs: bufferingAgeMs(),
+					playerState: playbackState(),
+					playbackRate: playbackRate(),
+					receiverVersion: RECEIVER_VERSION,
 				};
 			};
 
 			const sendStatus = (senderId = null) => {
 				const message = statusMessage();
-
-				const send = (id) => {
-					try {
-						context.sendCustomMessage(MESSAGE_NAMESPACE, id, message);
-					} catch (_) { }
-				};
-
-				if (senderId) {
-					send(senderId);
-					return message;
-				}
-
-				const senders = typeof context.getSenders === 'function'
-					? context.getSenders()
-					: [];
-
-				for (const sender of senders) {
-					if (sender && sender.id) send(sender.id);
-				}
-
+				sendCustomMessage(message, senderId);
 				return message;
+			};
+
+			const currentMediaLoadRequest = () => {
+				if (typeof playerManager.getMediaInformation !== 'function') return null;
+				const currentMedia = playerManager.getMediaInformation();
+				const contentId = currentMedia && (currentMedia.contentId || currentMedia.contentUrl);
+				if (!contentId) return null;
+
+				return {
+					autoplay: true,
+					media: {
+						contentId,
+						contentUrl: currentMedia.contentUrl || contentId,
+						contentType: currentMedia.contentType || 'application/x-mpegURL',
+						entity: currentMedia.entity || contentId,
+						streamType: cast.framework.messages.StreamType.LIVE,
+					},
+				};
+			};
+
+			const reloadCurrentManifest = (reason) => {
+				const nowMs = Date.now();
+				if (nowMs - lastManifestReloadMs < MANIFEST_RELOAD_COOLDOWN_MS) return;
+
+				const loadRequest = currentMediaLoadRequest();
+				if (!loadRequest || typeof playerManager.load !== 'function') return;
+
+				lastManifestReloadMs = nowMs;
+				logDiagnostic('manifest_reload', { reason });
+				Promise.resolve(playerManager.load(loadRequest)).catch((error) => {
+					logDiagnostic('manifest_reload_failed', {
+						reason,
+						error: error && error.message ? error.message : error,
+					});
+				});
+			};
+
+			const runLatencyWatchdog = () => {
+				const status = liveStatus();
+				if (!status || status.latency <= TARGET_LATENCY_SECONDS) return;
+
+				logDiagnostic('latency_watchdog', {
+					decision: receiverBuffering ? 'buffering_shaka_recovery' : 'shaka_live_sync',
+					current_latency_ms: Math.round(status.latency * 1000),
+					seekable_latency_ms: Math.round(status.seekableLatency * 1000),
+					current_time: status.currentTime.toFixed(3),
+					range_start: status.rangeStart,
+					range_end: status.rangeEnd.toFixed(3),
+					live_edge_time: status.liveEdgeTime.toFixed(3),
+					buffering: receiverBuffering,
+					buffering_age_ms: bufferingAgeMs(),
+					player_state: playbackState(),
+					playback_rate: playbackRate(),
+				});
 			};
 
 			playerManager.setMessageInterceptor(
@@ -190,10 +361,67 @@
 					}
 
 					loadRequestData.autoplay = true;
+					logDiagnostic('load', {
+						content_type: media ? media.contentType : '',
+						receiver_version: RECEIVER_VERSION,
+						target_latency: TARGET_LATENCY_SECONDS,
+						max_dynamic_latency: MAX_DYNAMIC_LATENCY_SECONDS,
+					});
 					sendStatus();
 					return loadRequestData;
 				},
 			);
+
+			const eventTypes = cast.framework.events && cast.framework.events.EventType
+				? cast.framework.events.EventType
+				: {};
+
+			const addPlayerEventListener = (eventType, listener) => {
+				if (!eventType || typeof playerManager.addEventListener !== 'function') return;
+				try {
+					playerManager.addEventListener(eventType, listener);
+				} catch (_) { }
+			};
+
+			addPlayerEventListener(eventTypes.BUFFERING, (event) => {
+				const nextBuffering = event ? event.isBuffering : null;
+				if (receiverBuffering !== nextBuffering) {
+					receiverBuffering = nextBuffering;
+					bufferingChangedAtMs = Date.now();
+				}
+				const status = liveStatus();
+				logDiagnostic('buffering', {
+					buffering: receiverBuffering,
+					buffering_age_ms: bufferingAgeMs(),
+					current_latency_ms: status ? Math.round(status.latency * 1000) : null,
+					seekable_latency_ms: status ? Math.round(status.seekableLatency * 1000) : null,
+					current_time: status ? status.currentTime.toFixed(3) : null,
+					range_start: status ? status.rangeStart : null,
+					range_end: status ? status.rangeEnd : null,
+					player_state: playbackState(),
+					playback_rate: playbackRate(),
+				});
+				logShakaStats();
+			});
+
+			addPlayerEventListener(eventTypes.ERROR, (event) => {
+				const detailedCode = event ? event.detailedErrorCode : '';
+				const errorText = [
+					detailedCode,
+					event ? event.reason : '',
+					event && event.error ? event.error.code : '',
+					event && event.error ? event.error.message : '',
+				].join(' ').toUpperCase();
+				logDiagnostic('error', {
+					detailed_code: detailedCode,
+					reason: event ? event.reason : '',
+					severity: event ? event.severity : '',
+				});
+
+				if (errorText.includes('NETWORK') || errorText.includes('SEGMENT')) {
+					reloadCurrentManifest(`network_${detailedCode}`);
+				}
+			});
 
 			context.addCustomMessageListener(MESSAGE_NAMESPACE, (event) => {
 				let message = event.data;
@@ -211,11 +439,15 @@
 				}
 			});
 
-			setInterval(sendStatus, STATUS_INTERVAL_MS);
+			setInterval(() => {
+				runLatencyWatchdog();
+				sendStatus();
+			}, STATUS_INTERVAL_MS);
 
 			const receiverOptions = new cast.framework.CastReceiverOptions();
 			receiverOptions.disableIdleTimeout = true;
 			receiverOptions.playbackConfig = playbackConfig;
+			receiverOptions.shakaVersion = '4.15.35';
 			receiverOptions.statusText = 'Glacier';
 			receiverOptions.useShakaForHls = true;
 

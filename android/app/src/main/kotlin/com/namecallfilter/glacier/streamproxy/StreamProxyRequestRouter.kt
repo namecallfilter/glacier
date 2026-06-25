@@ -4,10 +4,28 @@ import java.net.URI
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
-class StreamProxyRequestRouter {
-    private val videoWeaverChannels = ConcurrentHashMap<String, String>()
-    private val proxiedVideoWeaverUrls = ConcurrentHashMap.newKeySet<String>()
-    private val usherManifestUrls = ConcurrentHashMap<String, String>()
+class StreamProxyRequestRouter(
+    nowMs: () -> Long = { System.currentTimeMillis() },
+    maxTrackedUrls: Int = DEFAULT_MAX_TRACKED_URLS,
+    trackedUrlTtlMs: Long = DEFAULT_TRACKED_URL_TTL_MS,
+    maxManifestUrls: Int = DEFAULT_MAX_MANIFEST_URLS,
+    manifestUrlTtlMs: Long = DEFAULT_MANIFEST_URL_TTL_MS,
+) {
+    private val videoWeaverChannels = TtlLruMap<String, String>(
+        maxEntries = maxTrackedUrls,
+        ttlMs = trackedUrlTtlMs,
+        nowMs = nowMs,
+    )
+    private val proxiedVideoWeaverUrls = TtlLruMap<String, Unit>(
+        maxEntries = maxTrackedUrls,
+        ttlMs = trackedUrlTtlMs,
+        nowMs = nowMs,
+    )
+    private val usherManifestUrls = TtlLruMap<String, String>(
+        maxEntries = maxManifestUrls,
+        ttlMs = manifestUrlTtlMs,
+        nowMs = nowMs,
+    )
     private val usherChannelRegex = Regex("/hls/(.+)\\.m3u8", RegexOption.IGNORE_CASE)
     private val videoWeaverUrlRegex = Regex(
         "^https?://(?:[a-z0-9-]+\\.playlist\\.(?:live-video|ttvnw)\\.net|video-weaver\\.[a-z0-9-]+\\.hls\\.ttvnw\\.net)/v1/playlist/.+\\.m3u8(?:$|[?#])",
@@ -102,7 +120,7 @@ class StreamProxyRequestRouter {
     fun rememberUsherManifest(channel: String?, manifestUrl: String, manifestBody: String) {
         val normalizedChannel = channel?.lowercase(Locale.US) ?: return
         val baseUri = runCatching { URI(manifestUrl) }.getOrNull() ?: return
-        usherManifestUrls[normalizedChannel] = manifestUrl
+        usherManifestUrls.put(normalizedChannel, manifestUrl)
 
         manifestBody
             .lineSequence()
@@ -113,13 +131,13 @@ class StreamProxyRequestRouter {
             }
             .filter { videoWeaverUrlRegex.containsMatchIn(it) }
             .forEach { videoWeaverUrl ->
-                videoWeaverChannels[videoWeaverUrl] = normalizedChannel
+                videoWeaverChannels.put(videoWeaverUrl, normalizedChannel)
             }
     }
 
     fun rememberUsherRequest(url: String) {
         val channel = extractUsherChannel(url) ?: return
-        usherManifestUrls[channel] = url
+        usherManifestUrls.put(channel, url)
     }
 
     fun latestUsherManifestUrl(channel: String?): String? {
@@ -129,7 +147,7 @@ class StreamProxyRequestRouter {
             ?.takeIf(String::isNotEmpty)
             ?: return null
 
-        return usherManifestUrls[normalizedChannel]
+        return usherManifestUrls.get(normalizedChannel)
     }
 
     private fun routeUsher(
@@ -192,7 +210,7 @@ class StreamProxyRequestRouter {
         config: StreamProxyConfig,
         flagged: Boolean,
     ): StreamProxyDecision {
-        val channel = videoWeaverChannels[url] ?: config.currentChannelLogin.takeIf(String::isNotEmpty)
+        val channel = videoWeaverChannels.get(url) ?: config.currentChannelLogin.takeIf(String::isNotEmpty)
 
         if (!isVideoWeaverPlaylistUrl(url)) {
             return StreamProxyDecision(
@@ -224,7 +242,7 @@ class StreamProxyRequestRouter {
             )
         }
 
-        if (!proxiedVideoWeaverUrls.add(url)) {
+        if (!proxiedVideoWeaverUrls.putIfAbsent(url, Unit)) {
             return StreamProxyDecision(
                 requestType = StreamProxyRequestType.VIDEO_WEAVER,
                 action = StreamProxyAction.SKIP,
@@ -283,5 +301,90 @@ class StreamProxyRequestRouter {
             name.equals("accept", ignoreCase = true) &&
                 value.contains("TTV-LOL-PRO", ignoreCase = true)
         }
+    }
+
+    private class TtlLruMap<K, V>(
+        private val maxEntries: Int,
+        private val ttlMs: Long,
+        private val nowMs: () -> Long,
+    ) {
+        private val entries = ConcurrentHashMap<K, Entry<V>>()
+
+        fun put(key: K, value: V) {
+            val now = nowMs()
+            evict(now)
+            entries[key] = Entry(
+                value = value,
+                createdMs = now,
+                lastAccessMs = now,
+            )
+            evict(now)
+        }
+
+        fun putIfAbsent(key: K, value: V): Boolean {
+            val now = nowMs()
+            evict(now)
+            val existing = entries[key]
+            if (existing != null && !existing.isExpired(now, ttlMs)) {
+                entries[key] = existing.copy(lastAccessMs = now)
+                return false
+            }
+
+            entries[key] = Entry(
+                value = value,
+                createdMs = now,
+                lastAccessMs = now,
+            )
+            evict(now)
+            return true
+        }
+
+        fun get(key: K): V? {
+            val now = nowMs()
+            val existing = entries[key] ?: return null
+            if (existing.isExpired(now, ttlMs)) {
+                entries.remove(key, existing)
+                return null
+            }
+
+            entries[key] = existing.copy(lastAccessMs = now)
+            return existing.value
+        }
+
+        private fun evict(now: Long) {
+            entries.entries.removeIf { entry -> entry.value.isExpired(now, ttlMs) }
+
+            val limit = maxEntries.coerceAtLeast(0)
+            val removeCount = entries.size - limit
+            if (removeCount <= 0) return
+
+            entries.entries
+                .sortedWith(
+                    compareBy<MutableMap.MutableEntry<K, Entry<V>>> {
+                        it.value.lastAccessMs
+                    }.thenBy { it.key.hashCode() },
+                )
+                .take(removeCount)
+                .forEach { entry ->
+                    entries.remove(entry.key, entry.value)
+                }
+        }
+
+        private data class Entry<V>(
+            val value: V,
+            val createdMs: Long,
+            val lastAccessMs: Long,
+        ) {
+            fun isExpired(nowMs: Long, ttlMs: Long): Boolean {
+                return ttlMs >= 0L && nowMs - createdMs > ttlMs
+            }
+        }
+    }
+
+    private companion object {
+        private const val DEFAULT_MAX_TRACKED_URLS = 512
+        private const val DEFAULT_TRACKED_URL_TTL_MS = 10 * 60 * 1000L
+        private const val DEFAULT_MAX_MANIFEST_URLS = 128
+        private const val DEFAULT_MANIFEST_URL_TTL_MS = 6 * 60 * 60 * 1000L
     }
 }
